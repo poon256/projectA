@@ -1,10 +1,12 @@
 # -*- coding: utf-8 -*-
-
+import pandas as pd
+import mysql.connector
 import os
 import sys
 import json
 import base64
 import warnings
+
 
 warnings.filterwarnings("ignore")
 
@@ -21,19 +23,18 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-FISH_CSV = os.path.join(
-    BASE_DIR,
-    "mackerel_upper_gulf.csv"
-)
-
-ENV_CSV = os.path.join(
-    BASE_DIR,
-    "marine_environment.csv"
-)
-
+DB_CONFIG = {
+    "host": "localhost",
+    "user": "root",
+    "password": "",
+    "database": "projecta",
+    "charset": "utf8mb4"
+}
 PROJECT_DIR = os.path.dirname(BASE_DIR)
 
 OUTPUT_DIR = os.path.join(
@@ -138,43 +139,124 @@ def read_args():
 
     return province, year, month
 
-def load_csv():
+def load_sql():
 
-    if not os.path.exists(FISH_CSV):
+    try:
+
+        conn = mysql.connector.connect(
+            **DB_CONFIG
+        )
+
+        # =========================
+        # ข้อมูลปลาทู
+        # =========================
+
+        fish_sql = """
+            SELECT
+                station_id,
+                year AS ปี,
+                month AS เดือน,
+                amount AS `ปริมาณ (ตัน)`
+            FROM catch_mackereldata
+            WHERE status = 1
+        """
+
+        fish = pd.read_sql(
+            fish_sql,
+            conn
+        )
+
+        # =========================
+        # ข้อมูลสิ่งแวดล้อม
+        # =========================
+
+        env_sql = """
+        SELECT
+        m.station_id,
+        m.year AS ปี,
+        m.month AS เดือน,
+        m.sst AS `อุณหภูมิผิวทะเล`,
+        m.chlorophyll_a AS `คลอโรฟิลล์-เอ`,
+        AVG(w.rainfall) AS rainfall,
+        AVG(w.wind_speed) AS wind_speed
+        FROM marine_environment m
+        LEFT JOIN weather_data w
+        ON m.station_id = w.station_id
+        AND m.year = w.year
+        AND m.month = w.month
+        WHERE m.status = 1
+        GROUP BY
+        m.station_id,
+        m.year,
+        m.month,
+        m.sst,
+        m.chlorophyll_a
+        """
+
+        env = pd.read_sql(
+            env_sql,
+            conn
+        )
+
+        conn.close()
+
+        # =========================
+        # ตรวจสอบข้อมูล
+        # =========================
+
+        if fish.empty:
+
+            send_json({
+                "status": "error",
+                "message": "ไม่พบข้อมูลปลาทูในฐานข้อมูล"
+            })
+
+            sys.exit(0)
+
+        if env.empty:
+
+            send_json({
+                "status": "error",
+                "message": "ไม่พบข้อมูลสิ่งแวดล้อมในฐานข้อมูล"
+            })
+
+            sys.exit(0)
+
+        return fish, env
+
+    except Exception as e:
 
         send_json({
-
             "status": "error",
-
-            "message": f"ไม่พบไฟล์ {FISH_CSV}"
-
+            "message": f"MySQL Error: {str(e)}"
         })
 
         sys.exit(0)
 
-    if not os.path.exists(ENV_CSV):
 
-        send_json({
+def add_province(fish, env):
 
-            "status": "error",
+    station_map = {
 
-            "message": f"ไม่พบไฟล์ {ENV_CSV}"
+        1: "เพชรบุรี",
+        2: "สมุทรสงคราม",
+        3: "สมุทรสาคร",
+        4: "ชลบุรี",
+        5: "สมุทรปราการ"
 
-        })
+    }
 
-        sys.exit(0)
-
-    fish = pd.read_csv(
-        FISH_CSV,
-        encoding="utf-8-sig"
+    fish["จังหวัด"] = (
+        fish["station_id"]
+        .map(station_map)
     )
 
-    env = pd.read_csv(
-        ENV_CSV,
-        encoding="utf-8-sig"
+    env["จังหวัด"] = (
+        env["station_id"]
+        .map(station_map)
     )
 
-    return fish, env
+    return fish, env        
 
 def convert_month_columns(fish, env):
 
@@ -345,23 +427,26 @@ def prepare_data(
     )
 
 def create_density_class(train_df):
-    """
-    Convert catch (ton) into 3 density levels
-    using Quantile (33%, 66%)
-    """
 
     train_df = train_df.copy()
 
-    train_df["density_level"] = pd.qcut(
-    train_df["catch"],
-    q=3,
-    labels=[
-        "LOW",
-        "MEDIUM",
-        "HIGH"
-    ],
-    duplicates="drop"
-)
+    def classify_density(catch):
+
+        if catch >= 1 and catch <= 20:
+            return "LOW"
+
+        elif catch > 20 and catch <= 40:
+            return "MEDIUM"
+
+        elif catch > 40:
+            return "HIGH"
+
+        else:
+            return None
+
+    train_df["density_level"] = train_df["catch"].apply(
+        classify_density
+    )
 
     return train_df
 
@@ -371,60 +456,82 @@ def train_random_forest(df, selected_year):
         df["ปี"] < selected_year
     ].copy()
 
-    # ถ้าข้อมูลก่อนปีที่เลือกน้อย
-    # ให้ใช้ข้อมูลทั้งหมด
-
     if len(train_df) < 6:
-
         train_df = df.copy()
 
     if len(train_df) < 6:
 
         send_json({
-
             "status": "error",
-
             "message": "ข้อมูลสำหรับ Train ไม่เพียงพอ"
-
         })
 
         sys.exit(0)
 
     train_df = create_density_class(train_df)
 
-    X_train = train_df[
+    # ลบข้อมูลที่ไม่มี class
+    train_df = train_df.dropna(
+        subset=["density_level"]
+    )
 
+    X = train_df[
         [
-
             "อุณหภูมิผิวทะเล",
-
             "คลอโรฟิลล์-เอ",
-
+            "rainfall",
+            "wind_speed",
             "เดือน"
-
         ]
-
     ]
 
-    y_train = train_df["density_level"]
+    y = train_df["density_level"]
+
+    # ตรวจสอบจำนวน class ก่อนแบ่ง Train/Test
+    class_counts = y.value_counts()
+
+    if len(class_counts) < 2:
+        send_json({
+            "status": "error",
+            "message": "ข้อมูลต้องมี Density Level อย่างน้อย 2 ระดับ"
+        })
+        sys.exit(0)
+
+    # ถ้าแต่ละ class มีข้อมูลอย่างน้อย 2 ตัว
+    # ใช้ stratify เพื่อรักษาสัดส่วนของแต่ละ class
+    use_stratify = class_counts.min() >= 2
+
+    X_train, X_test, y_train, y_test = train_test_split(
+        X,
+        y,
+        test_size=0.2,
+        random_state=42,
+        stratify=y if use_stratify else None
+    )
 
     model = RandomForestClassifier(
-
         n_estimators=200,
-
         random_state=42
-
     )
 
+    # Train
     model.fit(
-
         X_train,
-
         y_train
-
     )
 
-    return model
+    # Predict Test
+    y_pred = model.predict(
+        X_test
+    )
+
+    # Accuracy
+    accuracy = accuracy_score(
+        y_test,
+        y_pred
+    )
+
+    return model, accuracy
 
 def predict_density_level(
     model,
@@ -451,7 +558,11 @@ def predict_density_level(
 
                     "อุณหภูมิผิวทะเล",
 
-                    "คลอโรฟิลล์-เอ"
+                    "คลอโรฟิลล์-เอ",
+
+                    "rainfall",
+
+                    "wind_speed"
 
                 ]
 
@@ -480,32 +591,33 @@ def predict_density_level(
         sys.exit(0)
 
     X_predict = pd.DataFrame(
+    [
+        {
+            "อุณหภูมิผิวทะเล":
+                float(
+                    month_env.iloc[0]["อุณหภูมิผิวทะเล"]
+                ),
 
-        [
+            "คลอโรฟิลล์-เอ":
+                float(
+                    month_env.iloc[0]["คลอโรฟิลล์-เอ"]
+                ),
 
-            {
+            "rainfall":
+                float(
+                    month_env.iloc[0]["rainfall"]
+                ),
 
-                "อุณหภูมิผิวทะเล":
+            "wind_speed":
+                float(
+                    month_env.iloc[0]["wind_speed"]
+                ),
 
-                    float(
-                        month_env.iloc[0]["อุณหภูมิผิวทะเล"]
-                    ),
-
-                "คลอโรฟิลล์-เอ":
-
-                    float(
-                        month_env.iloc[0]["คลอโรฟิลล์-เอ"]
-                    ),
-
-                "เดือน":
-
-                    int(selected_month)
-
-            }
-
-        ]
-
-    )
+            "เดือน":
+                int(selected_month)
+        }
+    ]
+)
 
     level = model.predict(
         X_predict
@@ -577,6 +689,18 @@ def predict_density_level(
 
             float(
                 month_env.iloc[0]["คลอโรฟิลล์-เอ"]
+            ),
+
+        "rainfall":
+
+        float(
+            month_env.iloc[0]["rainfall"]
+            ),
+
+        "wind_speed":
+
+        float(
+            month_env.iloc[0]["wind_speed"]
             )
 
     }
@@ -632,24 +756,35 @@ def main():
 
     province, selected_year, selected_month = read_args()
 
-    fish, env = load_csv()
+    # โหลดข้อมูลจาก MySQL
+    fish, env = load_sql()
 
+    # แปลง station_id เป็นชื่อจังหวัด
+    fish, env = add_province(
+        fish,
+        env
+    )
+
+    # จัดการปีและเดือน
     fish, env = convert_month_columns(
         fish,
         env
     )
 
+    # เตรียมข้อมูล
     fish_monthly, env_p, df = prepare_data(
         fish,
         env,
         province
     )
 
-    model = train_random_forest(
+    # Train Random Forest
+    model, accuracy = train_random_forest(
         df,
         selected_year
     )
 
+    # Predict จังหวัด / ปี / เดือนที่เลือก
     result = predict_density_level(
         model,
         env_p,
@@ -657,35 +792,46 @@ def main():
         selected_month
     )
 
+    # สร้างกราฟ Probability
     probability_graph = save_probability_graph(
-    result["probability"]
-)
+        result["probability"]
+    )
 
+    # ส่งผลกลับ PHP
     send_json({
 
-    "status": "success",
+        "status": "success",
 
-    "province": province,
+        "province": province,
 
-    "year": int(selected_year),
+        "year": int(selected_year),
 
-    "month": int(selected_month),
+        "month": int(selected_month),
 
-    "level": result["level"],
+        "level": result["level"],
 
-    "description": result["description"],
+        "description": result["description"],
 
-    "badge_color": result["badge_color"],
+        "badge_color": result["badge_color"],
 
-    "sst": result["sst"],
+        "sst": result["sst"],
 
-    "chlor_a": result["chlor_a"],
+        "chlor_a": result["chlor_a"],
 
-    "probability": result["probability"],
+        "rainfall": result["rainfall"],
 
-    "probability_graph": probability_graph
+        "wind_speed": result["wind_speed"],
 
-})
+        "probability": result["probability"],
+
+        "probability_graph": probability_graph,
+
+        "accuracy": round(
+            float(accuracy) * 100,
+            2
+        )
+
+    })
 
 if __name__ == "__main__":
 

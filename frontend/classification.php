@@ -96,62 +96,48 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
         );
 
         $command =
-
-            escapeshellcmd($python)
-
-            . " "
-
-            . escapeshellarg($script)
-
-            . " "
-
-            . escapeshellarg($province64)
-
-            . " "
-
-            . escapeshellarg($year)
-
-            . " "
-
-            . escapeshellarg($month)
-
-            . " --b64";
-
+        
+        escapeshellarg($python)
+        . " " . 
+        escapeshellarg($script)
+        . " " . 
+        escapeshellarg($province64)
+        . " " .
+        escapeshellarg($year)
+        . " " . 
+        escapeshellarg($month)
+        . " --b64 2>&1";
+        
         $output = shell_exec($command);
 
         if (!$output) {
 
-            $error = "Python execution failed.";
+    $error = "Python execution failed.";
+    
+    }
+    
+    else {
 
-        }
-        else {
+    $result = json_decode($output, true);
 
-            $result = json_decode(
-                $output,
-                true
-            );
+    if (json_last_error() !== JSON_ERROR_NONE) {
 
-            if (!$result) {
+        $error = "Invalid JSON response: " . json_last_error_msg()
+               . "<br><pre>" . htmlspecialchars($output) . "</pre>";
 
-                $error = "Invalid JSON response.";
+        $result = null;
 
-            }
-            elseif (
+    }
+    elseif (
+        isset($result["status"])
+        &&
+        $result["status"] == "error"
+    ) {
 
-                isset($result["status"])
+        $error = $result["message"] ?? "Python returned an error.";
 
-                &&
-
-                $result["status"] == "error"
-
-            ) {
-
-                $error = $result["message"];
-
-            }
-
-        }
-
+    }
+    }
     }
 
 }
@@ -364,41 +350,85 @@ Classification Result
 
 <div class="row">
 
-<div class="col-md-6">
+    <div class="col-md-3">
 
-<h6>
+        <h6>
+            Sea Surface Temperature
+        </h6>
 
-Sea Surface Temperature
+        <p class="fs-5">
+            <?= number_format($result["sst"], 2) ?> °C
+        </p>
 
-</h6>
+    </div>
 
-<p class="fs-5">
+    <div class="col-md-3">
 
-<?= number_format($result["sst"],2) ?> °C
+        <h6>
+            Chlorophyll-a
+        </h6>
 
-</p>
+        <p class="fs-5">
+            <?= number_format($result["chlor_a"], 2) ?> mg/m³
+        </p>
+
+    </div>
+
+    <div class="col-md-3">
+
+        <h6>
+            Rainfall
+        </h6>
+
+        <p class="fs-5">
+            <?= number_format($result["rainfall"], 2) ?> mm
+        </p>
+
+    </div>
+
+    <div class="col-md-3">
+
+        <h6>
+            Wind Speed
+        </h6>
+
+        <p class="fs-5">
+            <?= number_format($result["wind_speed"], 2) ?> m/s
+        </p>
+
+    </div>
 
 </div>
 
-<div class="col-md-6">
+<div class="card shadow-sm border-0 mb-4">
 
-<h6>
+    <div class="card-header">
 
-Chlorophyll-a
+        Model Performance
 
-</h6>
+    </div>
 
-<p class="fs-5">
+    <div class="card-body text-center">
 
-<?= number_format($result["chlor_a"],2) ?> mg/m³
+        <h6>
 
-</p>
+            Random Forest Accuracy
 
-</div>
+        </h6>
 
-</div>
+        <p class="display-5 fw-bold text-success">
 
-</div>
+            <?= number_format($result["accuracy"], 2) ?>%
+
+        </p>
+
+        <p class="text-muted mb-0">
+
+            Accuracy from Test Dataset
+
+        </p>
+
+    </div>
 
 </div>
 
