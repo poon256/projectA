@@ -85,7 +85,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
     }
     else {
 
-        $python = realpath(__DIR__ . '/../.venv/Scripts/python.exe');
+        $python = 'python';
 
         $script = realpath(
             "../model/Classification_RandomForest.py"
