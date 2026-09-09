@@ -19,34 +19,21 @@ conn = mysql.connector.connect(
 )
 
 # อ่านข้อมูลจาก dataset_ml
-sql = """
-select
-    station_id,
-    year,
-    month,
-    equipment_id,
-    sum(amount) AS amount,
-    avg(sst) AS sst,
-    avg(chlorophyll_a) AS chlorophyll_a,
-    avg(rainfall) AS rainfall,
-    avg(wind_speed) AS wind_speed
-from dataset_ml
-group by
-    station_id,
-    year,
-    month,
-    equipment_id
-order by
-    year,
-    month,
-    station_id,
-    equipment_id
-"""
+sql = """select station_id,year,month,equipment_id,
+    sum(amount) as amount,
+    avg(sst) as sst,
+    avg(chlorophyll_a) as chlorophyll_a,
+    avg(rainfall) as rainfall,
+    avg(wind_speed) as wind_speed,
+    avg(wind_direction) as wind_direction  
+    from dataset_ml
+    group by station_id,year,month,equipment_id
+    order by year,month,station_id,equipment_id"""
 
 df = pd.read_sql(sql, conn)
 
 # ทำความสะอาดข้อมูล
-df = df.dropna(subset=["amount", "sst", "chlorophyll_a", "rainfall", "wind_speed"])
+df = df.dropna(subset=["amount", "sst", "chlorophyll_a", "rainfall", "wind_speed","wind_direction"])
 df = df[df["amount"] > 0].copy()
 
 print("จำนวนข้อมูลที่ใช้ K-Means:", len(df))
@@ -59,7 +46,8 @@ df_cluster = (
         "sst": "mean",
         "chlorophyll_a": "mean",
         "rainfall": "mean",
-        "wind_speed": "mean"
+        "wind_speed": "mean",
+        "wind_direction" : "mean"
     })
     .reset_index()
 )
@@ -70,7 +58,9 @@ print("จำนวนข้อมูลสำหรับ Clustering:", len(df_
 features = [
              "sst",
                "chlorophyll_a", 
-               "rainfall"
+               "rainfall",
+               "wind_speed",
+               "wind_direction"
             ]
 X = df_cluster[features].copy()
 
@@ -178,7 +168,7 @@ plt.show()
 # แสดงผลการจัดกลุ่ม
 print("\n=== ผลการจัดกลุ่ม ===")
 print(
-    df_cluster[["station_id", "year", "month", "amount", "sst", "chlorophyll_a", "rainfall", "wind_speed", "cluster"]]
+    df_cluster[["station_id", "year", "month", "amount", "sst", "chlorophyll_a", "rainfall", "wind_speed","wind_direction", "cluster"]]
     .head(20)
     .to_string(index=False)
 )
@@ -190,7 +180,8 @@ summary = df_cluster.groupby("cluster").agg({
     "sst": "mean",
     "chlorophyll_a": "mean",
     "rainfall": "mean",
-    "wind_speed": "mean"
+    "wind_speed": "mean",
+    "wind_direction": "mean"
 })
 print(summary)
 

@@ -25,9 +25,6 @@ print(df.head())
 print(df.columns)
 
 
-# --------------------------------
-# แปลงข้อมูลเป็นตัวเลข
-# --------------------------------
 
 df['u_current'] = pd.to_numeric(
     df['u_current'],
@@ -45,10 +42,7 @@ df = df.dropna(
 )
 
 
-# --------------------------------
 # แปลงเวลา
-# --------------------------------
-
 df['time'] = pd.to_datetime(df['time'])
 
 # กัน NOAA ส่งข้อมูลเกินปี
@@ -58,29 +52,20 @@ df = df[
 ]
 
 
-# --------------------------------
 # เพิ่ม year / month
-# --------------------------------
-
 df['year'] = df['time'].dt.year
 df['month'] = df['time'].dt.month
 
 
-# --------------------------------
 # คำนวณความเร็วกระแสน้ำ
-#
 # speed = sqrt(u² + v²)
-# --------------------------------
-
 df['current_speed'] = np.sqrt(
     df['u_current'] ** 2 +
     df['v_current'] ** 2
 )
 
 
-# --------------------------------
 # ค่าเฉลี่ยกระแสน้ำรายเดือน
-# --------------------------------
 
 monthly = (
     df.groupby(['year', 'month'])
@@ -96,9 +81,7 @@ print("\nค่าเฉลี่ยกระแสน้ำรายเดื�
 print(monthly)
 
 
-# --------------------------------
 # เชื่อม MySQL
-# --------------------------------
 
 conn = mysql.connector.connect(
     host="127.0.0.1",
@@ -112,9 +95,7 @@ conn = mysql.connector.connect(
 cursor = conn.cursor()
 
 
-# --------------------------------
 # UPDATE ลง marine_environment
-# --------------------------------
 
 sql = """
 UPDATE marine_environment
