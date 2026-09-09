@@ -408,25 +408,173 @@ Classification Result
 
     </div>
 
-    <div class="card-body text-center">
+    <div class="card-body">
 
-        <h6>
+        <div class="row text-center">
 
-            Random Forest Accuracy
+            <div class="col-md-3">
 
-        </h6>
+                <h6>Accuracy</h6>
 
-        <p class="display-5 fw-bold text-success">
+                <p class="display-6 fw-bold text-success">
 
-            <?= number_format($result["accuracy"], 2) ?>%
+                    <?= number_format($result["accuracy"], 2) ?>%
+
+                </p>
+
+            </div>
+
+            <div class="col-md-3">
+
+                <h6>Precision</h6>
+
+                <p class="display-6 fw-bold">
+
+                    <?= number_format($result["precision"], 2) ?>%
+
+                </p>
+
+            </div>
+
+            <div class="col-md-3">
+
+                <h6>Recall</h6>
+
+                <p class="display-6 fw-bold">
+
+                    <?= number_format($result["recall"], 2) ?>%
+
+                </p>
+
+            </div>
+
+            <div class="col-md-3">
+
+                <h6>F1-Score</h6>
+
+                <p class="display-6 fw-bold">
+
+                    <?= number_format($result["f1"], 2) ?>%
+
+                </p>
+
+            </div>
+
+        </div>
+
+        <p class="text-muted text-center mb-0">
+
+            Metrics from Test Dataset
 
         </p>
 
-        <p class="text-muted mb-0">
+    </div>
 
-            Accuracy from Test Dataset
+</div>
+
+<div class="card shadow-sm border-0 mb-4">
+
+    <div class="card-header">
+
+        Confusion Matrix
+
+    </div>
+
+    <div class="card-body">
+
+        <?php
+        $cm = $result["confusion_matrix"] ?? [];
+        $labels = $result["confusion_labels"] ?? ["LOW", "MEDIUM", "HIGH"];
+        ?>
+
+        <?php if(count($cm) === 3): ?>
+
+        <div class="table-responsive">
+
+            <table class="table table-bordered text-center align-middle">
+
+                <thead class="table-light">
+
+                    <tr>
+
+                        <th rowspan="2">
+
+                            Actual \ Predicted
+
+                        </th>
+
+                        <th colspan="3">
+
+                            Predicted
+
+                        </th>
+
+                    </tr>
+
+                    <tr>
+
+                        <?php foreach($labels as $label): ?>
+
+                        <th>
+
+                            <?= htmlspecialchars($label) ?>
+
+                        </th>
+
+                        <?php endforeach; ?>
+
+                    </tr>
+
+                </thead>
+
+                <tbody>
+
+                    <?php foreach($cm as $i => $row): ?>
+
+                    <tr>
+
+                        <th class="table-light">
+
+                            <?= htmlspecialchars($labels[$i]) ?>
+
+                        </th>
+
+                        <?php foreach($row as $value): ?>
+
+                        <td class="fs-5 fw-bold">
+
+                            <?= (int)$value ?>
+
+                        </td>
+
+                        <?php endforeach; ?>
+
+                    </tr>
+
+                    <?php endforeach; ?>
+
+                </tbody>
+
+            </table>
+
+        </div>
+
+        <p class="text-muted text-center mb-0">
+
+            Rows = Actual Class &nbsp; | &nbsp;
+            Columns = Predicted Class
 
         </p>
+
+        <?php else: ?>
+
+        <div class="alert alert-warning mb-0">
+
+            Confusion Matrix data not available.
+
+        </div>
+
+        <?php endif; ?>
 
     </div>
 

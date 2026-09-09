@@ -6,6 +6,13 @@ import sys
 import json
 import base64
 import warnings
+from sklearn.metrics import (
+    accuracy_score,
+    confusion_matrix,
+    precision_score,
+    recall_score,
+    f1_score
+)
 
 
 warnings.filterwarnings("ignore")
@@ -525,13 +532,49 @@ def train_random_forest(df, selected_year):
         X_test
     )
 
-    # Accuracy
+    # Confusion Matrix
+    labels = ["LOW", "MEDIUM", "HIGH"]
+
+    cm = confusion_matrix(
+        y_test,
+        y_pred,
+        labels=labels
+    )
+
+    # Model Metrics
     accuracy = accuracy_score(
         y_test,
         y_pred
     )
 
-    return model, accuracy
+    precision = precision_score(
+        y_test,
+        y_pred,
+        average="weighted",
+        zero_division=0
+    )
+
+    recall = recall_score(
+        y_test,
+        y_pred,
+        average="weighted",
+        zero_division=0
+    )
+
+    f1 = f1_score(
+        y_test,
+        y_pred,
+        average="weighted",
+        zero_division=0
+    )
+
+    return model, accuracy, {
+        "confusion_matrix": cm.tolist(),
+        "labels": labels,
+        "precision": round(float(precision), 4),
+        "recall": round(float(recall), 4),
+        "f1": round(float(f1), 4)
+    }
 
 def predict_density_level(
     model,
@@ -779,10 +822,10 @@ def main():
     )
 
     # Train Random Forest
-    model, accuracy = train_random_forest(
-        df,
-        selected_year
-    )
+    model, accuracy, metrics = train_random_forest(
+    df,
+    selected_year
+)
 
     # Predict จังหวัด / ปี / เดือนที่เลือก
     result = predict_density_level(
@@ -826,12 +869,13 @@ def main():
 
         "probability_graph": probability_graph,
 
-        "accuracy": round(
-            float(accuracy) * 100,
-            2
-        )
-
-    })
+        "accuracy": round(float(accuracy) * 100,2),
+        "precision": round(metrics["precision"] * 100,2),
+        "recall": round(metrics["recall"] * 100,2),
+        "f1": round(metrics["f1"] * 100,2),
+        "confusion_matrix": metrics["confusion_matrix"],
+        "confusion_labels": metrics["labels"]
+})
 
 if __name__ == "__main__":
 
