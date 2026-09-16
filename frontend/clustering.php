@@ -233,24 +233,33 @@ data.forEach(function(r){
         "ปี : "+r.year+"<br>"+
         "เดือน : "+r.month+"<hr>"+
         "<b>จำนวนปลารวม :</b> "+parseFloat(r.amount).toFixed(2)+" ตัน<br>"+
-        "<b>Cluster :</b> "+r.cluster
+        "<b>Cluster :</b> กลุ่มที่ " + (parseInt(r.cluster) + 1)
     );
 }); 
 
 var legend = L.control({position: 'bottomright'});
-legend.onAdd = function (map) {
-    var div = L.DomUtil.create('div', 'legend'),
-        labels = ['วิกฤต/ปลาน้อย', 'ปลาชุกชุม'],
-        colors = ['red','blue'];
 
-    div.innerHTML = '<b>ระดับสภาวะกลุ่ม</b><br>';
+legend.onAdd = function (map) {
+
+    var div = L.DomUtil.create('div', 'legend');
+
+    var labels = ['กลุ่มที่ 1','กลุ่มที่ 2'];
+
+    var colors = ['red','blue'];
+
+    div.innerHTML = '<b>กลุ่ม K-Means</b><br>';
+
     for (var i = 0; i < colors.length; i++) {
+
         div.innerHTML +=
-            '<i style="background:' + colors[i] + '"></i> ' + labels[i] + '<br>';
+            '<i style="background:' + colors[i] + '"></i> ' +labels[i] +'<br>';
     }
+
     return div;
 };
+
 legend.addTo(map);
+
 </script> 
  
 </body> 

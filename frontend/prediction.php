@@ -1,16 +1,23 @@
 <?php
+
 session_start();
 
 /*
+|--------------------------------------------------------------------------
 | Prediction Dashboard
+|--------------------------------------------------------------------------
 | Regression:
 |   model/Regression_Linear.py
 |
 | Classification:
 |   model/Classification_RandomForest.py
 |
+| Clustering:
+|   K-Means จาก dataset_ml
+|
 | Database:
 |   projecta
+|--------------------------------------------------------------------------
 */
 
 $result = null;
@@ -35,8 +42,11 @@ $monthNames = [
     12 => 'ธันวาคม'
 ];
 
+
 /*
+|--------------------------------------------------------------------------
 | ฟังก์ชันเรียก Python
+|--------------------------------------------------------------------------
 */
 
 function runPython($script, $province, $year, $month)
@@ -60,6 +70,7 @@ function runPython($script, $province, $year, $month)
     $output = shell_exec($command);
 
     if ($output === null || trim($output) === '') {
+
         return [
             'status' => 'error',
             'message' => 'ไม่สามารถเรียก Python ได้'
@@ -67,9 +78,10 @@ function runPython($script, $province, $year, $month)
     }
 
     /*
-     * Python อาจมีข้อความ warning ก่อน JSON
+     * Python อาจมี warning ก่อน JSON
      * จึงหา JSON object จาก output
      */
+
     $lines = preg_split('/\R/', trim($output));
 
     for ($i = count($lines) - 1; $i >= 0; $i--) {
@@ -82,7 +94,11 @@ function runPython($script, $province, $year, $month)
 
         $json = json_decode($line, true);
 
-        if (json_last_error() === JSON_ERROR_NONE && is_array($json)) {
+        if (
+            json_last_error() === JSON_ERROR_NONE
+            && is_array($json)
+        ) {
+
             return $json;
         }
     }
@@ -96,26 +112,40 @@ function runPython($script, $province, $year, $month)
 
 
 /*
+|--------------------------------------------------------------------------
 | Prediction
+|--------------------------------------------------------------------------
 */
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['predict'])) {
+if (
+    $_SERVER['REQUEST_METHOD'] === 'POST'
+    && isset($_POST['predict'])
+) {
 
     if ($month < 1 || $month > 12) {
+
         $error = 'เดือนต้องอยู่ระหว่าง 1-12';
+
     } elseif ($year < 2562 || $year > 2570) {
+
         $error = 'ปีต้องอยู่ระหว่าง 2562-2570';
+
     } else {
 
         /*
+        |--------------------------------------------------------------------------
         | 1. Regression
+        |--------------------------------------------------------------------------
         */
 
         $regressionScript = realpath(
             __DIR__ . '/../model/Regression_Linear.py'
         );
 
-        if (!$regressionScript || !file_exists($regressionScript)) {
+        if (
+            !$regressionScript
+            || !file_exists($regressionScript)
+        ) {
 
             $error = 'ไม่พบ Regression_Linear.py';
 
@@ -128,15 +158,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['predict'])) {
                 $month
             );
 
+
             /*
+            |--------------------------------------------------------------------------
             | 2. Classification
+            |--------------------------------------------------------------------------
             */
 
             $classificationScript = realpath(
                 __DIR__ . '/../model/Classification_RandomForest.py'
             );
 
-            if (!$classificationScript || !file_exists($classificationScript)) {
+            if (
+                !$classificationScript
+                || !file_exists($classificationScript)
+            ) {
 
                 $classification = [
                     'status' => 'error',
@@ -155,10 +191,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['predict'])) {
 
 
             /*
+            |--------------------------------------------------------------------------
             | ตรวจสอบ Regression
+            |--------------------------------------------------------------------------
             */
 
-            if (($regression['status'] ?? '') !== 'success') {
+            if (
+                ($regression['status'] ?? '') !== 'success'
+            ) {
 
                 $error =
                     'Regression Error: '
@@ -167,7 +207,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['predict'])) {
             } else {
 
                 /*
-                | รวมผล
+                |--------------------------------------------------------------------------
+                | รวมผล Regression + Classification
+                |--------------------------------------------------------------------------
                 */
 
                 $result = [
@@ -218,7 +260,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['predict'])) {
 
 
 /*
+|--------------------------------------------------------------------------
 | Cluster จาก dataset_ml
+|--------------------------------------------------------------------------
+|
+| K-Means = 5 กลุ่ม
+|
+| Cluster ที่เก็บใน SQL:
+|   0
+|   1
+|   2
+|   3
+|   4
+|
+| หน้าเว็บจะแสดง:
+|   กลุ่มที่ 1
+|   กลุ่มที่ 2
+|   กลุ่มที่ 3
+|   กลุ่มที่ 4
+|   กลุ่มที่ 5
+|
+| สำคัญ:
+| ถ้าปีที่เลือกไม่มีข้อมูล Cluster ใน SQL
+| จะไม่เอาปีอื่นมาแทน
+|
+|--------------------------------------------------------------------------
 */
 
 $cluster = null;
@@ -230,19 +296,49 @@ $conn = @new mysqli(
     'projecta'
 );
 
-if (!$conn->connect_error && $result) {
+if (
+    !$conn->connect_error
+    && $result
+) {
+
+    /*
+    |--------------------------------------------------------------------------
+    | Province -> Station ID
+    |--------------------------------------------------------------------------
+    */
 
     $stationMap = [
-        'เพชรบุรี'      => 1,
-        'สมุทรสงคราม'  => 2,
-        'สมุทรสาคร'    => 3,
+
+        'เพชรบุรี'     => 1,
+
+        /*
+         * รองรับชื่อเดิมในฐานข้อมูลด้วย
+         */
+        'เพรชบุรี'     => 1,
+
+        'สมุทรสงคราม' => 2,
+
+        'สมุทรสาคร'   => 3,
+
         'ชลบุรี'       => 4,
-        'สมุทรปราการ'  => 5
+
+        'สมุทรปราการ' => 5
     ];
 
-    $stationId = $stationMap[$province] ?? null;
+
+    $stationId =
+        $stationMap[$province]
+        ?? null;
+
 
     if ($stationId !== null) {
+
+        /*
+        |--------------------------------------------------------------------------
+        | ดึง Cluster ตาม
+        | station + year + month
+        |--------------------------------------------------------------------------
+        */
 
         $stmt = $conn->prepare("
             SELECT cluster
@@ -250,9 +346,11 @@ if (!$conn->connect_error && $result) {
             WHERE station_id = ?
               AND year = ?
               AND month = ?
+              AND cluster IS NOT NULL
             ORDER BY id DESC
             LIMIT 1
         ");
+
 
         if ($stmt) {
 
@@ -265,11 +363,19 @@ if (!$conn->connect_error && $result) {
 
             $stmt->execute();
 
-            $queryResult = $stmt->get_result();
+            $queryResult =
+                $stmt->get_result();
 
-            if ($row = $queryResult->fetch_assoc()) {
-                $cluster = $row['cluster'];
+
+            if (
+                $row =
+                $queryResult->fetch_assoc()
+            ) {
+
+                $cluster =
+                    $row['cluster'];
             }
+
 
             $stmt->close();
         }
@@ -280,55 +386,135 @@ if (!$conn->connect_error && $result) {
 
 
 /*
-| Classification Data
+|--------------------------------------------------------------------------
+| แปลง Cluster สำหรับแสดงผล
+|--------------------------------------------------------------------------
+|
+| SQL:
+|   0-4
+|
+| Web:
+|   กลุ่มที่ 1-5
+|
+|--------------------------------------------------------------------------
 */
 
-$classification = $result['classification'] ?? [];
+$clusterDisplay = 'N/A';
 
-$level = $classification['level'] ?? null;
+if (
+    $cluster !== null
+    && is_numeric($cluster)
+) {
 
-if (!$level) {
-    $level = $classification['density_level'] ?? null;
+    $clusterNumber =
+        (int)$cluster;
+
+    if (
+        $clusterNumber >= 0
+        && $clusterNumber <= 4
+    ) {
+
+        $clusterDisplay =
+            'กลุ่มที่ '
+            . ($clusterNumber + 1);
+    }
 }
 
-$accuracy = $classification['accuracy'] ?? null;
 
-$precision = $classification['precision'] ?? null;
-$recall    = $classification['recall'] ?? null;
-$f1        = $classification['f1'] ?? null;
+/*
+|--------------------------------------------------------------------------
+| Classification Data
+|--------------------------------------------------------------------------
+*/
 
-$probability = $classification['probability'] ?? [];
+$classification =
+    $result['classification']
+    ?? [];
+
+$level =
+    $classification['level']
+    ?? null;
+
+if (!$level) {
+
+    $level =
+        $classification['density_level']
+        ?? null;
+}
+
+$accuracy =
+    $classification['accuracy']
+    ?? null;
+
+$precision =
+    $classification['precision']
+    ?? null;
+
+$recall =
+    $classification['recall']
+    ?? null;
+
+$f1 =
+    $classification['f1']
+    ?? null;
+
+$probability =
+    $classification['probability']
+    ?? [];
 
 $description =
     $classification['description']
     ?? '';
 
 
+/*
+|--------------------------------------------------------------------------
+| Classification Badge
+|--------------------------------------------------------------------------
+*/
+
 $badgeClass = 'bg-secondary';
 
 if ($level === 'LOW') {
+
     $badgeClass = 'bg-success';
 }
 
 if ($level === 'MEDIUM') {
+
     $badgeClass = 'bg-warning text-dark';
 }
 
 if ($level === 'HIGH') {
+
     $badgeClass = 'bg-danger';
 }
 
 
+/*
+|--------------------------------------------------------------------------
+| Spawning Months
+|--------------------------------------------------------------------------
+*/
+
 $spawningMonths = [
-    1, 2, 3, 4
+    1,
+    2,
+    3,
+    4
 ];
 
 $isSpawning =
-    in_array($month, $spawningMonths);
+    in_array(
+        $month,
+        $spawningMonths
+    );
 
 
 /*
+|--------------------------------------------------------------------------
 | AI Summary
+|--------------------------------------------------------------------------
 */
 
 $summary = '';
@@ -338,21 +524,26 @@ if ($result) {
     if ($level === 'HIGH') {
 
         $summary =
-            "พื้นที่ {$province} ในเดือน {$monthNames[$month]} "
-            . "มีแนวโน้มความหนาแน่นของปลาทูอยู่ในระดับสูง "
+            "พื้นที่ {$province} ในเดือน "
+            . $monthNames[$month]
+            . " มีแนวโน้มความหนาแน่นของปลาทูอยู่ในระดับสูง "
             . "จากผลการจำแนกของ Random Forest";
 
     } elseif ($level === 'MEDIUM') {
 
         $summary =
-            "พื้นที่ {$province} ในเดือน {$monthNames[$month]} "
-            . "มีแนวโน้มความหนาแน่นของปลาทูอยู่ในระดับปานกลาง";
+            "พื้นที่ {$province} ในเดือน "
+            . $monthNames[$month]
+            . " มีแนวโน้มความหนาแน่นของปลาทูอยู่ในระดับปานกลาง "
+            . "จากผลการจำแนกของ Random Forest";
 
     } elseif ($level === 'LOW') {
 
         $summary =
-            "พื้นที่ {$province} ในเดือน {$monthNames[$month]} "
-            . "มีแนวโน้มความหนาแน่นของปลาทูอยู่ในระดับต่ำ";
+            "พื้นที่ {$province} ในเดือน "
+            . $monthNames[$month]
+            . " มีแนวโน้มความหนาแน่นของปลาทูอยู่ในระดับต่ำ "
+            . "จากผลการจำแนกของ Random Forest";
 
     } else {
 
@@ -365,6 +556,7 @@ if ($result) {
 ?>
 
 <!DOCTYPE html>
+
 <html lang="th">
 
 <head>
@@ -376,56 +568,77 @@ if ($result) {
     content="width=device-width, initial-scale=1.0"
 >
 
-<title>Prediction Dashboard</title>
+<title>
+    Prediction Dashboard
+</title>
+
 
 <link
     href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"
     rel="stylesheet"
 >
 
+
 <link
     rel="stylesheet"
     href="../css/menu.css"
 >
+
 
 <link
     rel="stylesheet"
     href="../css/data.css"
 >
 
+
 <link
     rel="stylesheet"
     href="../css/footer.css"
 >
 
+
 <style>
 
 .result-card {
+
     min-height: 170px;
+
 }
 
 .metric-number {
+
     font-size: 32px;
+
     font-weight: 700;
+
 }
 
 .environment-card {
+
     border-left: 4px solid #0d6efd;
+
 }
 
 .probability-bar {
+
     height: 24px;
+
 }
 
 .heatmap-box {
+
     border-radius: 10px;
+
     padding: 25px;
+
     background: #f8f9fa;
+
 }
 
 </style>
 
 </head>
+
 
 <body>
 
@@ -434,7 +647,8 @@ if ($result) {
 
 <div class="container page-container">
 
-    <!--HEADER-->
+
+    <!-- HEADER -->
 
     <div class="page-header mb-4">
 
@@ -449,13 +663,17 @@ if ($result) {
     </div>
 
 
-    <!--ERROR-->
+    <!-- ERROR -->
 
     <?php if ($error): ?>
 
         <div class="alert alert-danger">
 
-            <strong>Prediction Error</strong><br>
+            <strong>
+                Prediction Error
+            </strong>
+
+            <br>
 
             <?= htmlspecialchars($error) ?>
 
@@ -464,19 +682,25 @@ if ($result) {
     <?php endif; ?>
 
 
-    <!--INPUT-->
+    <!-- INPUT -->
 
     <div class="card shadow-sm border-0 mb-4">
 
         <div class="card-header">
-            <strong>Prediction Parameters</strong>
+
+            <strong>
+                Prediction Parameters
+            </strong>
+
         </div>
+
 
         <div class="card-body">
 
             <form method="POST">
 
                 <div class="row">
+
 
                     <!-- MONTH -->
 
@@ -486,17 +710,24 @@ if ($result) {
                             Month
                         </label>
 
+
                         <select
                             name="month"
                             class="form-select"
                             required
                         >
 
-                            <?php foreach ($monthNames as $number => $name): ?>
+                            <?php foreach (
+                                $monthNames
+                                as $number => $name
+                            ): ?>
 
                                 <option
                                     value="<?= $number ?>"
-                                    <?= $month == $number ? 'selected' : '' ?>
+                                    <?= $month == $number
+                                        ? 'selected'
+                                        : ''
+                                    ?>
                                 >
 
                                     <?= $name ?>
@@ -517,6 +748,7 @@ if ($result) {
                         <label class="form-label">
                             Year
                         </label>
+
 
                         <input
                             type="number"
@@ -539,6 +771,7 @@ if ($result) {
                             Province
                         </label>
 
+
                         <select
                             name="province"
                             class="form-select"
@@ -546,20 +779,35 @@ if ($result) {
                         >
 
                             <?php
+
                             $provinces = [
+
                                 'สมุทรปราการ',
+
                                 'สมุทรสาคร',
+
                                 'สมุทรสงคราม',
+
                                 'เพชรบุรี',
+
                                 'ชลบุรี'
+
                             ];
+
                             ?>
 
-                            <?php foreach ($provinces as $p): ?>
+
+                            <?php foreach (
+                                $provinces
+                                as $p
+                            ): ?>
 
                                 <option
                                     value="<?= htmlspecialchars($p) ?>"
-                                    <?= $province === $p ? 'selected' : '' ?>
+                                    <?= $province === $p
+                                        ? 'selected'
+                                        : ''
+                                    ?>
                                 >
 
                                     <?= htmlspecialchars($p) ?>
@@ -595,7 +843,7 @@ if ($result) {
     <?php if ($result): ?>
 
 
-    <!-- SPAWNING-->
+    <!-- SPAWNING -->
 
     <?php if ($isSpawning): ?>
 
@@ -609,9 +857,10 @@ if ($result) {
     <?php endif; ?>
 
 
-    <!--MAIN RESULT-->
+    <!-- MAIN RESULT -->
 
     <div class="row mb-4">
+
 
         <!-- REGRESSION -->
 
@@ -625,6 +874,7 @@ if ($result) {
                         Regression
                     </h5>
 
+
                     <div class="metric-number text-primary">
 
                         <?= number_format(
@@ -634,8 +884,11 @@ if ($result) {
 
                     </div>
 
+
                     <small class="text-muted">
+
                         Ton
+
                     </small>
 
                 </div>
@@ -657,6 +910,7 @@ if ($result) {
                         Classification
                     </h5>
 
+
                     <?php if ($level): ?>
 
                         <span
@@ -667,14 +921,21 @@ if ($result) {
 
                         </span>
 
+
                         <div class="mt-2 text-muted">
+
                             Density Level
+
                         </div>
 
                     <?php else: ?>
 
-                        <span class="badge bg-secondary fs-6">
+                        <span
+                            class="badge bg-secondary fs-6"
+                        >
+
                             N/A
+
                         </span>
 
                     <?php endif; ?>
@@ -698,17 +959,20 @@ if ($result) {
                         Cluster
                     </h5>
 
+
                     <div class="metric-number">
 
-                        <?= $cluster !== null
-                            ? htmlspecialchars($cluster)
-                            : 'N/A'
-                        ?>
+                        <?= htmlspecialchars(
+                            $clusterDisplay
+                        ) ?>
 
                     </div>
 
+
                     <small class="text-muted">
-                        Environmental Cluster
+
+                        K-Means Environmental Cluster
+
                     </small>
 
                 </div>
@@ -720,7 +984,7 @@ if ($result) {
     </div>
 
 
-    <!--ENVIRONMENT-->
+    <!-- ENVIRONMENT -->
 
     <div class="card shadow-sm border-0 mb-4">
 
@@ -732,10 +996,14 @@ if ($result) {
 
         </div>
 
+
         <div class="card-body">
 
             <div class="row">
 
+
+                <!-- SST -->
+
                 <div class="col-md-4 mb-3">
 
                     <div class="card environment-card">
@@ -743,23 +1011,32 @@ if ($result) {
                         <div class="card-body">
 
                             <small class="text-muted">
+
                                 Sea Surface Temperature
+
                             </small>
+
 
                             <h4>
 
                                 <?= $result['sst'] !== null
+
                                     ? number_format(
                                         (float)$result['sst'],
                                         2
                                     ) . ' °C'
+
                                     : 'N/A'
+
                                 ?>
 
                             </h4>
 
+
                             <small>
+
                                 SST
+
                             </small>
 
                         </div>
@@ -769,6 +1046,8 @@ if ($result) {
                 </div>
 
 
+                <!-- CHLOROPHYLL -->
+
                 <div class="col-md-4 mb-3">
 
                     <div class="card environment-card">
@@ -776,23 +1055,32 @@ if ($result) {
                         <div class="card-body">
 
                             <small class="text-muted">
+
                                 Chlorophyll-a
+
                             </small>
+
 
                             <h4>
 
                                 <?= $result['chlor_a'] !== null
+
                                     ? number_format(
                                         (float)$result['chlor_a'],
                                         2
                                     )
+
                                     : 'N/A'
+
                                 ?>
 
                             </h4>
 
+
                             <small>
+
                                 mg/m³
+
                             </small>
 
                         </div>
@@ -802,6 +1090,8 @@ if ($result) {
                 </div>
 
 
+                <!-- PREDICTION MODE -->
+
                 <div class="col-md-4 mb-3">
 
                     <div class="card environment-card">
@@ -809,8 +1099,11 @@ if ($result) {
                         <div class="card-body">
 
                             <small class="text-muted">
+
                                 Prediction Mode
+
                             </small>
+
 
                             <h6 class="mt-2">
 
@@ -833,7 +1126,7 @@ if ($result) {
     </div>
 
 
-    <!--CLASSIFICATION PROBABILITY-->
+    <!-- CLASSIFICATION PROBABILITY -->
 
     <?php if (!empty($probability)): ?>
 
@@ -847,26 +1140,40 @@ if ($result) {
 
             </div>
 
+
             <div class="card-body">
 
-                <?php foreach ($probability as $name => $value): ?>
+                <?php foreach (
+                    $probability
+                    as $name => $value
+                ): ?>
 
                     <div class="mb-3">
 
-                        <div class="d-flex justify-content-between">
+                        <div
+                            class="d-flex justify-content-between"
+                        >
 
                             <strong>
-                                <?= htmlspecialchars($name) ?>
+
+                                <?= htmlspecialchars(
+                                    $name
+                                ) ?>
+
                             </strong>
 
+
                             <span>
+
                                 <?= number_format(
                                     (float)$value,
                                     2
                                 ) ?>%
+
                             </span>
 
                         </div>
+
 
                         <div class="progress probability-bar">
 
@@ -875,7 +1182,10 @@ if ($result) {
                                 role="progressbar"
                                 style="width: <?= min(
                                     100,
-                                    max(0, (float)$value)
+                                    max(
+                                        0,
+                                        (float)$value
+                                    )
                                 ) ?>%"
                             ></div>
 
@@ -892,13 +1202,18 @@ if ($result) {
     <?php endif; ?>
 
 
-    <!--MODEL PERFORMANCE-->
+    <!-- MODEL PERFORMANCE -->
 
     <?php if (
-        $accuracy !== null ||
-        $precision !== null ||
-        $recall !== null ||
-        $f1 !== null
+
+        $accuracy !== null
+
+        || $precision !== null
+
+        || $recall !== null
+
+        || $f1 !== null
+
     ): ?>
 
         <div class="card shadow-sm border-0 mb-4">
@@ -911,11 +1226,15 @@ if ($result) {
 
             </div>
 
+
             <div class="card-body">
 
                 <div class="row text-center">
 
-                    <?php if ($accuracy !== null): ?>
+
+                    <?php if (
+                        $accuracy !== null
+                    ): ?>
 
                         <div class="col-md-3 mb-3">
 
@@ -923,11 +1242,14 @@ if ($result) {
                                 Accuracy
                             </h6>
 
+
                             <h3>
+
                                 <?= number_format(
                                     (float)$accuracy,
                                     2
                                 ) ?>%
+
                             </h3>
 
                         </div>
@@ -935,7 +1257,9 @@ if ($result) {
                     <?php endif; ?>
 
 
-                    <?php if ($precision !== null): ?>
+                    <?php if (
+                        $precision !== null
+                    ): ?>
 
                         <div class="col-md-3 mb-3">
 
@@ -943,11 +1267,14 @@ if ($result) {
                                 Precision
                             </h6>
 
+
                             <h3>
+
                                 <?= number_format(
                                     (float)$precision,
                                     2
                                 ) ?>%
+
                             </h3>
 
                         </div>
@@ -955,7 +1282,9 @@ if ($result) {
                     <?php endif; ?>
 
 
-                    <?php if ($recall !== null): ?>
+                    <?php if (
+                        $recall !== null
+                    ): ?>
 
                         <div class="col-md-3 mb-3">
 
@@ -963,11 +1292,14 @@ if ($result) {
                                 Recall
                             </h6>
 
+
                             <h3>
+
                                 <?= number_format(
                                     (float)$recall,
                                     2
                                 ) ?>%
+
                             </h3>
 
                         </div>
@@ -975,7 +1307,9 @@ if ($result) {
                     <?php endif; ?>
 
 
-                    <?php if ($f1 !== null): ?>
+                    <?php if (
+                        $f1 !== null
+                    ): ?>
 
                         <div class="col-md-3 mb-3">
 
@@ -983,11 +1317,14 @@ if ($result) {
                                 F1 Score
                             </h6>
 
+
                             <h3>
+
                                 <?= number_format(
                                     (float)$f1,
                                     2
                                 ) ?>%
+
                             </h3>
 
                         </div>
@@ -1003,7 +1340,7 @@ if ($result) {
     <?php endif; ?>
 
 
-    <!--FORECAST GRAPH-->
+    <!-- FORECAST GRAPH -->
 
     <div class="card shadow-sm border-0 mb-4">
 
@@ -1014,6 +1351,7 @@ if ($result) {
             </strong>
 
         </div>
+
 
         <div class="card-body">
 
@@ -1028,17 +1366,18 @@ if ($result) {
     </div>
 
 
-    <!--HEATMAP-->
+    <!-- HEATMAP / CLUSTER -->
 
     <div class="card shadow-sm border-0 mb-4">
 
         <div class="card-header">
 
             <strong>
-                Environmental Heatmap
+                Environmental Cluster
             </strong>
 
         </div>
+
 
         <div class="card-body">
 
@@ -1046,17 +1385,28 @@ if ($result) {
 
                 <div class="row text-center">
 
+
+                    <!-- PROVINCE -->
+
                     <div class="col-md-4">
 
                         <strong>
                             Province
                         </strong>
 
+
                         <div class="mt-2">
-                            <?= htmlspecialchars($province) ?>
+
+                            <?= htmlspecialchars(
+                                $province
+                            ) ?>
+
                         </div>
 
                     </div>
+
+
+                    <!-- MONTH -->
 
                     <div class="col-md-4">
 
@@ -1064,30 +1414,53 @@ if ($result) {
                             Month
                         </strong>
 
+
                         <div class="mt-2">
+
                             <?= htmlspecialchars(
                                 $monthNames[$month]
                             ) ?>
+
                         </div>
 
                     </div>
+
+
+                    <!-- CLUSTER -->
 
                     <div class="col-md-4">
 
                         <strong>
-                            Cluster
+                            K-Means Cluster
                         </strong>
+
 
                         <div class="mt-2">
 
-                            <?= $cluster !== null
-                                ? htmlspecialchars($cluster)
-                                : 'N/A'
-                            ?>
+                            <?= htmlspecialchars(
+                                $clusterDisplay
+                            ) ?>
 
                         </div>
 
                     </div>
+
+                </div>
+
+
+                <!-- CLUSTER INFORMATION -->
+
+                <hr class="my-4">
+
+
+                <div class="text-center text-muted">
+
+                    <small>
+
+                        K-Means แบ่งข้อมูลสภาพแวดล้อมออกเป็น
+                        5 กลุ่มตามลักษณะข้อมูลที่มีความใกล้เคียงกัน
+
+                    </small>
 
                 </div>
 
@@ -1098,7 +1471,8 @@ if ($result) {
     </div>
 
 
-    <!--AI SUMMARY -->
+    <!-- AI SUMMARY -->
+
     <div class="card shadow-sm border-0 mb-4">
 
         <div class="card-header">
@@ -1109,15 +1483,24 @@ if ($result) {
 
         </div>
 
+
         <div class="card-body">
 
-            <?= htmlspecialchars($summary) ?>
+            <?= htmlspecialchars(
+                $summary
+            ) ?>
 
-            <?php if ($result['ton'] !== null): ?>
 
-                <br><br>
+            <?php if (
+                $result['ton'] !== null
+            ): ?>
+
+                <br>
+                <br>
+
 
                 ระบบคาดการณ์ปริมาณปลาทูประมาณ
+
 
                 <strong class="text-primary">
 
@@ -1130,25 +1513,66 @@ if ($result) {
 
                 </strong>
 
+
                 สำหรับ
 
+
                 <strong>
-                    <?= htmlspecialchars($province) ?>
+
+                    <?= htmlspecialchars(
+                        $province
+                    ) ?>
+
                 </strong>
+
 
                 เดือน
 
+
                 <strong>
+
                     <?= htmlspecialchars(
                         $monthNames[$month]
                     ) ?>
+
                 </strong>
+
 
                 ปี
 
+
                 <strong>
-                    <?= htmlspecialchars($year) ?>
+
+                    <?= htmlspecialchars(
+                        $year
+                    ) ?>
+
                 </strong>
+
+
+                <?php if (
+                    $cluster !== null
+                ): ?>
+
+                    <br>
+                    <br>
+
+                    ข้อมูลสภาพแวดล้อมของพื้นที่นี้
+                    อยู่ใน
+
+
+                    <strong>
+
+                        <?= htmlspecialchars(
+                            $clusterDisplay
+                        ) ?>
+
+                    </strong>
+
+
+                    จากการจัดกลุ่มด้วย K-Means
+
+                <?php endif; ?>
 
             <?php endif; ?>
 
@@ -1166,8 +1590,9 @@ if ($result) {
 
 
 <script
-    src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js">
-</script>
+    src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"
+></script>
+
 
 </body>
 
