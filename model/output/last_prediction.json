@@ -1,0 +1,22 @@
+{
+  "success": true,
+  "prediction": "MEDIUM",
+  "prediction_th": "ปานกลาง",
+  "confidence": 0.7566666666666667,
+  "probabilities": {
+    "LOW": 0.18666666666666668,
+    "MEDIUM": 0.7566666666666667,
+    "HIGH": 0.056666666666666664
+  },
+  "mode": "auto",
+  "input": {
+    "year": 2562,
+    "month": 1,
+    "province": "เพชรบุรี",
+    "station_id": 1,
+    "sst": 28.32,
+    "chlorophyll_a": 3.06,
+    "rainfall": 20.5,
+    "wind_speed": 16.19677353
+  }
+}

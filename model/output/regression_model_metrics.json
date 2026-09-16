@@ -1,0 +1,301 @@
+{
+  "validation_metrics": {
+    "rows": 56,
+    "mae": 6.5371,
+    "mse": 67.9961,
+    "rmse": 8.246,
+    "mape": 102.3646,
+    "smape": 108.2943,
+    "wmape": 86.1364,
+    "r2": 0.312122,
+    "adjusted_r2": -0.719694,
+    "nrmse_percent": 108.6529,
+    "mean_bias_error": 3.1736,
+    "mean_actual": 7.5893,
+    "median_absolute_error": 4.5999,
+    "p90_absolute_error": 13.9535,
+    "max_absolute_error": 20.2883
+  },
+  "diagnostics": {
+    "equation": "Final prediction = 0.50 × [Catch ton = -2.198858 - 0.082648 × SST - 0.700472 × ln(1 + Chlorophyll-a) + 0.014650 × Rainfall - 0.093904 × Wind Speed - 1.134187 × sin(2π × Month / 12) + 0.611924 × cos(2π × Month / 12) - 0.782954 × Year index + 0.121004 × Previous-year catch - 0.026253 × Previous monthly mean catch - 0.026173 × Previous monthly median catch + 0.358912 × SST lag 1 month + 0.142780 × SST lag 2 months - 0.024707 × SST lag 3 months - 0.545963 × Chlorophyll-a lag 1 month + 0.004851 × Chlorophyll-a lag 2 months - 0.228871 × Chlorophyll-a lag 3 months + 0.019657 × Rainfall lag 1 month + 0.007382 × Rainfall lag 2 months + 0.008356 × Rainfall lag 3 months - 0.073341 × Wind Speed lag 1 month + 0.259778 × Wind Speed lag 2 months + 0.236316 × Wind Speed lag 3 months - 0.001799 × SST² - 0.151010 × ln(1 + Chlorophyll-a)² - 0.021279 × SST × ln(1 + Chlorophyll-a) - 0.480564 × SST monthly change - 0.177480 × Chlorophyll-a monthly change - 0.007096 × Rainfall monthly change - 0.044260 × Wind Speed monthly change - 0.051228 × SST seasonal anomaly - 0.512958 × Chlorophyll-a seasonal anomaly + 0.022729 × Rainfall seasonal anomaly + 0.411713 × Wind Speed seasonal anomaly] + 0.50 × Seasonal baseline",
+    "target_scale": "Catch ton",
+    "intercept": -2.19885802,
+    "model_type": "ridge",
+    "alpha": 100.0,
+    "n_components": 0,
+    "blend_weight": 0.5,
+    "coefficient_note": "Ridge coefficients are regularized; classical p-values are approximate.",
+    "coefficients": [
+      {
+        "term": "Intercept",
+        "coefficient": -2.19885802,
+        "std_error": 463.91592124,
+        "t_stat": -0.00474,
+        "p_value": 0.99623448
+      },
+      {
+        "term": "SST",
+        "coefficient": -0.08264797,
+        "std_error": 21.96857039,
+        "t_stat": -0.003762,
+        "p_value": 0.9970112
+      },
+      {
+        "term": "ln(1 + Chlorophyll-a)",
+        "coefficient": -0.70047241,
+        "std_error": 40.91848509,
+        "t_stat": -0.017119,
+        "p_value": 0.98640065
+      },
+      {
+        "term": "Rainfall",
+        "coefficient": 0.01464981,
+        "std_error": 0.27946937,
+        "t_stat": 0.05242,
+        "p_value": 0.9583741
+      },
+      {
+        "term": "Wind Speed",
+        "coefficient": -0.09390389,
+        "std_error": 1.08595624,
+        "t_stat": -0.086471,
+        "p_value": 0.93138972
+      },
+      {
+        "term": "sin(2π × Month / 12)",
+        "coefficient": -1.13418716,
+        "std_error": 6.71133791,
+        "t_stat": -0.168996,
+        "p_value": 0.86638804
+      },
+      {
+        "term": "cos(2π × Month / 12)",
+        "coefficient": 0.61192361,
+        "std_error": 7.65659275,
+        "t_stat": 0.079921,
+        "p_value": 0.9365751
+      },
+      {
+        "term": "Year index",
+        "coefficient": -0.78295429,
+        "std_error": 0.70280583,
+        "t_stat": -1.114041,
+        "p_value": 0.26985711
+      },
+      {
+        "term": "Previous-year catch",
+        "coefficient": 0.12100386,
+        "std_error": 0.24113785,
+        "t_stat": 0.501804,
+        "p_value": 0.61770523
+      },
+      {
+        "term": "Previous monthly mean catch",
+        "coefficient": -0.02625299,
+        "std_error": 0.7188491,
+        "t_stat": -0.036521,
+        "p_value": 0.97099245
+      },
+      {
+        "term": "Previous monthly median catch",
+        "coefficient": -0.02617319,
+        "std_error": 0.6656853,
+        "t_stat": -0.039318,
+        "p_value": 0.96877215
+      },
+      {
+        "term": "SST lag 1 month",
+        "coefficient": 0.35891163,
+        "std_error": 11.15326888,
+        "t_stat": 0.03218,
+        "p_value": 0.97443903
+      },
+      {
+        "term": "SST lag 2 months",
+        "coefficient": 0.1427804,
+        "std_error": 1.34089005,
+        "t_stat": 0.106482,
+        "p_value": 0.91556754
+      },
+      {
+        "term": "SST lag 3 months",
+        "coefficient": -0.02470685,
+        "std_error": 1.23110381,
+        "t_stat": -0.020069,
+        "p_value": 0.98405732
+      },
+      {
+        "term": "Chlorophyll-a lag 1 month",
+        "coefficient": -0.54596298,
+        "std_error": 20.46947397,
+        "t_stat": -0.026672,
+        "p_value": 0.97881286
+      },
+      {
+        "term": "Chlorophyll-a lag 2 months",
+        "coefficient": 0.00485097,
+        "std_error": 2.74747373,
+        "t_stat": 0.001766,
+        "p_value": 0.99859731
+      },
+      {
+        "term": "Chlorophyll-a lag 3 months",
+        "coefficient": -0.22887116,
+        "std_error": 2.76785114,
+        "t_stat": -0.082689,
+        "p_value": 0.93438346
+      },
+      {
+        "term": "Rainfall lag 1 month",
+        "coefficient": 0.01965688,
+        "std_error": 0.23649005,
+        "t_stat": 0.083119,
+        "p_value": 0.9340429
+      },
+      {
+        "term": "Rainfall lag 2 months",
+        "coefficient": 0.00738198,
+        "std_error": 0.05442977,
+        "t_stat": 0.135624,
+        "p_value": 0.89258822
+      },
+      {
+        "term": "Rainfall lag 3 months",
+        "coefficient": 0.00835639,
+        "std_error": 0.05464284,
+        "t_stat": 0.152927,
+        "p_value": 0.87898635
+      },
+      {
+        "term": "Wind Speed lag 1 month",
+        "coefficient": -0.07334104,
+        "std_error": 0.83072501,
+        "t_stat": -0.088286,
+        "p_value": 0.92995383
+      },
+      {
+        "term": "Wind Speed lag 2 months",
+        "coefficient": 0.25977797,
+        "std_error": 0.93315773,
+        "t_stat": 0.278386,
+        "p_value": 0.78170622
+      },
+      {
+        "term": "Wind Speed lag 3 months",
+        "coefficient": 0.23631563,
+        "std_error": 0.9105946,
+        "t_stat": 0.259518,
+        "p_value": 0.79615461
+      },
+      {
+        "term": "SST²",
+        "coefficient": -0.00179936,
+        "std_error": 0.61242835,
+        "t_stat": -0.002938,
+        "p_value": 0.99766584
+      },
+      {
+        "term": "ln(1 + Chlorophyll-a)²",
+        "coefficient": -0.15101015,
+        "std_error": 3.80229373,
+        "t_stat": -0.039716,
+        "p_value": 0.96845631
+      },
+      {
+        "term": "SST × ln(1 + Chlorophyll-a)",
+        "coefficient": -0.0212793,
+        "std_error": 2.2549625,
+        "t_stat": -0.009437,
+        "p_value": 0.99250313
+      },
+      {
+        "term": "SST monthly change",
+        "coefficient": -0.48056354,
+        "std_error": 10.84695441,
+        "t_stat": -0.044304,
+        "p_value": 0.96481426
+      },
+      {
+        "term": "Chlorophyll-a monthly change",
+        "coefficient": -0.17747966,
+        "std_error": 20.53098297,
+        "t_stat": -0.008644,
+        "p_value": 0.99313245
+      },
+      {
+        "term": "Rainfall monthly change",
+        "coefficient": -0.00709579,
+        "std_error": 0.24480224,
+        "t_stat": -0.028986,
+        "p_value": 0.97697542
+      },
+      {
+        "term": "Wind Speed monthly change",
+        "coefficient": -0.04425982,
+        "std_error": 0.56535443,
+        "t_stat": -0.078287,
+        "p_value": 0.93786933
+      },
+      {
+        "term": "SST seasonal anomaly",
+        "coefficient": -0.05122847,
+        "std_error": 2.20596204,
+        "t_stat": -0.023223,
+        "p_value": 0.98155232
+      },
+      {
+        "term": "Chlorophyll-a seasonal anomaly",
+        "coefficient": -0.51295843,
+        "std_error": 4.98038322,
+        "t_stat": -0.102996,
+        "p_value": 0.91832162
+      },
+      {
+        "term": "Rainfall seasonal anomaly",
+        "coefficient": 0.02272876,
+        "std_error": 0.12478134,
+        "t_stat": 0.182149,
+        "p_value": 0.85610117
+      },
+      {
+        "term": "Wind Speed seasonal anomaly",
+        "coefficient": 0.41171262,
+        "std_error": 1.64141609,
+        "t_stat": 0.250828,
+        "p_value": 0.80283379
+      }
+    ],
+    "training_metrics": {
+      "rows": 92,
+      "mae": 5.9352,
+      "mse": 70.6153,
+      "rmse": 8.4033,
+      "mape": 77.0044,
+      "smape": 84.6205,
+      "wmape": 64.6963,
+      "r2": 0.313344,
+      "adjusted_r2": -0.07734,
+      "nrmse_percent": 91.5998,
+      "mean_bias_error": 0.5862,
+      "mean_actual": 9.1739,
+      "median_absolute_error": 4.8243,
+      "p90_absolute_error": 13.8785,
+      "max_absolute_error": 29.6286
+    },
+    "residual_standard_error": 9.677475,
+    "f_statistic": 1.303746,
+    "f_p_value": 0.18595662,
+    "aic": 443.199603,
+    "bic": 528.940415,
+    "degrees_of_freedom": 58
+  },
+  "annual_calibration": "last",
+  "annual_calibration_weight": 0.5,
+  "guardrail": "iqr1",
+  "environment_features": [
+    "SST",
+    "Chlorophyll-a",
+    "Rainfall",
+    "Wind Speed"
+  ]
+}
