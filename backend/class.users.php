@@ -44,7 +44,6 @@ class users
 
                         <tr>
 
-                            <th class='text-center'>Id</th>
 
                             <th class='text-center'>user</th>
 
@@ -66,13 +65,6 @@ class users
 
                         <?php
 
-                        /*
-                         * Admin
-                         * เห็น User ทั้งหมด
-                         *
-                         * User ทั่วไป
-                         * เห็นเฉพาะตัวเอง
-                         */
 
                         if (($acl == '2') or ($acl > '5'))
                         {
@@ -91,9 +83,6 @@ class users
 
                             echo "<tr>";
 
-                            echo "<td>";
-                            echo $cdr['id'];
-                            echo "</td>";
 
                             echo "<td>";
                             echo $cdr['user'];
@@ -132,10 +121,7 @@ class users
 
                             echo "<td>";
 
-                            /*
-                             * Admin
-                             * Edit / Active / Detail ได้ทุกคน
-                             */
+
                             if (($acl == '2') or ($acl > '5'))
                             {
 
