@@ -550,12 +550,6 @@ for var in features:
 
 
 # Update Cluster กลับไป dataset_ml
-# Cluster เป็นระดับพื้นที่และช่วงเวลา
-# 1 record = station + year + month
-# ข้อมูลทุก equipment ภายใน
-# station + year + month เดียวกัน
-# จะได้รับ Cluster เดียวกัน
-
 cursor = conn.cursor()
 
 

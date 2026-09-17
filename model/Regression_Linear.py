@@ -1,7467 +1,2298 @@
 # -*- coding: utf-8 -*-
-"""
-Regression_Linear.py
+"""Linear Regression สำหรับคาดการณ์ปริมาณปลาทูจากฐานข้อมูล projecta."""
 
-Train and validate a Linear Regression-family model from the projectA MySQL database.
-
-Environmental variables:
-    - SST
-    - Chlorophyll-a
-    - Rainfall
-    - Wind Speed
-
-The script uses:
-    - Walk-forward validation
-    - Linear Regression / Ridge / PLS
-    - Seasonal and historical catch features
-    - Environmental lag features
-    - Annual-total calibration
-    - Optional month-level guardrails
-    - Future recursive forecast
-
-Usage from PHP:
-    python Regression_Linear.py <province_base64> <year> <month> --b64
-
-Required Python packages:
-    pip install pandas numpy scikit-learn matplotlib mysql-connector-python scipy
-
-PyMySQL can be used instead of mysql-connector-python:
-    pip install pymysql
-"""
 
 from __future__ import annotations
 
 import base64
 import json
-import math
 import os
-import re
 import sys
-import warnings
-from dataclasses import dataclass
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
-
-warnings.filterwarnings("ignore")
-
-try:
-    sys.stdout.reconfigure(encoding="utf-8")
-    sys.stderr.reconfigure(encoding="utf-8")
-except Exception:
-    pass
+from pathlib import Path
+from typing import Any, Dict, List, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
 
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-
-from sklearn.impute import SimpleImputer
-from sklearn.linear_model import LinearRegression, Ridge
-from sklearn.cross_decomposition import PLSRegression
-from sklearn.preprocessing import StandardScaler
+from sklearn.compose import ColumnTransformer
+from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
-
-try:
-    from scipy import stats as scipy_stats
-except Exception:
-    scipy_stats = None
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder
 
 
-# =========================================================
-# PATH / CONFIG
-# =========================================================
+# 1) ตั้งค่าหลัก
+START_YEAR = 2562
+REQUESTED_END_YEAR = 2569
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_DIR = os.path.dirname(BASE_DIR)
-OUTPUT_DIR = os.path.join(BASE_DIR, "output")
-PHP_DB_CONFIG = os.path.join(PROJECT_DIR, "config", "class.connect.php")
+# ปรับค่าได้: ช่วง decay ใช้ให้น้ำหนักข้อมูลปีใหม่มากกว่าปีเก่า decay < 1.00 ข้อมูลเก่ามีน้ำหนักลดลง,decay = 1.00 ข้อมูลทุกปีมีน้ำหนักเท่ากัน
+DECAY_GRID = np.round(np.arange(0.70, 1.001, 0.05), 2)
 
-MIN_ALLOWED_YEAR = 2562
-MAX_ALLOWED_YEAR = 2570
+# ปรับค่าได้: สัดส่วน Linear Regression เทียบกับค่าเฉลี่ยตามฤดูกาล ;ใกล้ 1 ข้าง regression
+# 0.50 = ใช้ Regression 50% + Seasonal reference 50%
+# Seasonal reference = ข้อมูลเฉลี่ยในเดือนเดียวกันและค่าสูงสุด
+MODEL_WEIGHT_GRID = np.round(np.arange(0.50, 1.001, 0.025), 3)
 
+# ปรับค่าได้: Alpha จำกัดค่าคาดการณ์ไม่ให้สูงเกิน seasonal maximum มากเกินไป ;1.00 = 100% SM
+CAP_GRID = [None, 1.25, 1.50, 2.00, 3.00]
 
-# =========================================================
-# FEATURE LABELS
-# =========================================================
+# ปรับค่าได้: ความแรงของ Bias correction
+# 0.0 = ปิด Bias, 1.0 = ใช้ค่าชดเชยจาก median residual เต็มค่า
+BIAS_STRENGTH = 1.0
 
-FEATURE_LABELS = {
-    "sst": "SST",
-    "chlor_log": "ln(1 + Chlorophyll-a)",
-    "rainfall": "Rainfall",
-    "wind_speed": "Wind Speed",
+# ปรับค่าได้: จำกัด Bias ไม่ให้เกินสัดส่วนนี้ของค่ากลางปริมาณจับ
+# ใช้เพื่อป้องกัน Bias ที่สูงผิดปกติจาก outlier
+BIAS_MAX_MEDIAN_RATIO = 0.90
 
-    "month_sin": "sin(2π × Month / 12)",
-    "month_cos": "cos(2π × Month / 12)",
-    "year_index": "Year index",
-
-    "lag12": "Previous-year catch",
-    "month_avg_prior": "Previous monthly mean catch",
-    "month_median_prior": "Previous monthly median catch",
-
-    # SST / Chlorophyll lag
-    "sst_lag1": "SST lag 1 month",
-    "sst_lag2": "SST lag 2 months",
-    "sst_lag3": "SST lag 3 months",
-
-    "chlor_log_lag1": "Chlorophyll-a lag 1 month",
-    "chlor_log_lag2": "Chlorophyll-a lag 2 months",
-    "chlor_log_lag3": "Chlorophyll-a lag 3 months",
-
-    # Weather lag
-    "rainfall_lag1": "Rainfall lag 1 month",
-    "rainfall_lag2": "Rainfall lag 2 months",
-    "rainfall_lag3": "Rainfall lag 3 months",
-
-    "wind_speed_lag1": "Wind Speed lag 1 month",
-    "wind_speed_lag2": "Wind Speed lag 2 months",
-    "wind_speed_lag3": "Wind Speed lag 3 months",
-
-    # Nonlinear environment
-    "sst_sq": "SST²",
-    "chlor_log_sq": "ln(1 + Chlorophyll-a)²",
-    "sst_chlor": "SST × ln(1 + Chlorophyll-a)",
-
-    "sst_delta1": "SST monthly change",
-    "chlor_delta1": "Chlorophyll-a monthly change",
-
-    "rainfall_delta1": "Rainfall monthly change",
-    "wind_speed_delta1": "Wind Speed monthly change",
-
-    "sst_anomaly": "SST seasonal anomaly",
-    "chlor_anomaly": "Chlorophyll-a seasonal anomaly",
-
-    "rainfall_anomaly": "Rainfall seasonal anomaly",
-    "wind_speed_anomaly": "Wind Speed seasonal anomaly",
-
-    "sst_distance_30_5": "Distance from SST 30.5°C",
-    "sst_distance_sq": "Squared distance from SST 30.5°C",
-    "sst_in_gulf_range": "SST in 29.5–31.5°C range",
+# ปรับค่าได้: ให้น้ำหนัก Validation ปีใหม่มากขึ้นรายจังหวัด
+# 1.0 = Walk-forward ปกติ
+# >1.0 = ให้ Validation ปีล่าสุดมีอิทธิพลต่อการเลือก Parameter มากขึ้น
+VALIDATION_RECENCY_BY_STATION = {
+    1: 1.30,  # เพชรบุรี
+    2: 1.00,  # สมุทรสงคราม
+    3: 6.00,  # สมุทรสาคร
+    4: 1.00,  # ชลบุรี
+    5: 12.00, # สมุทรปราการ
 }
 
-for _month_number in range(2, 13):
-    FEATURE_LABELS[f"month_{_month_number}"] = f"Month={_month_number}"
-
-
-# =========================================================
-# FEATURE SETS
-# =========================================================
+# ปรับค่าได้: ระดับความแรงของ Bias ที่ทดลองเฉพาะจังหวัดที่ใช้ Recency tuning
+BIAS_STRENGTH_GRID_BY_STATION = {
+    1: [0.00, 0.25, 0.50, 0.75, 1.00, 1.25, 1.50],
+    3: [0.00, 0.50, 1.00],
+    5: [0.00, 0.25, 0.50, 0.75, 1.00, 1.25, 1.50],
+}
 
 BASE_FEATURES = [
     "sst",
-    "chlor_log",
+    "chlorophyll_a",
     "rainfall",
     "wind_speed",
-    "month_sin",
-    "month_cos",
+    "air_temperature",
+    "wind_dir_sin",
+    "wind_dir_cos",
     "year_index",
 ]
 
-LEGACY_HISTORY_FEATURES = BASE_FEATURES + [
-    "lag12",
-    "month_avg_prior",
-]
-
-HISTORY_FEATURES = LEGACY_HISTORY_FEATURES + [
-    "month_median_prior",
-]
-
-MONTH_DUMMY_FEATURES = [
-    f"month_{month}"
-    for month in range(2, 13)
-]
-
-DUMMY_HISTORY_FEATURES = [
+SSS_FEATURES = [
     "sst",
-    "chlor_log",
+    "chlorophyll_a",
+    "sss",
     "rainfall",
     "wind_speed",
+    "air_temperature",
+    "wind_dir_sin",
+    "wind_dir_cos",
     "year_index",
-] + MONTH_DUMMY_FEATURES + [
-    "lag12",
-    "month_avg_prior",
-    "month_median_prior",
 ]
 
+# ปรับค่าได้: เปิด/ปิด SSS 
+USE_SSS_BY_STATION = {
+    1: True,   # เพชรบุรี
+    2: True,   # สมุทรสงคราม
+    3: True,   # สมุทรสาคร
+    4: True,  # ชลบุรี f
+    5: True,  # สมุทรปราการ f
+}
 
-ENVIRONMENT_LAG_FEATURES = HISTORY_FEATURES + [
-    "sst_lag1",
-    "sst_lag2",
-    "sst_lag3",
+# ปรับค่าได้: เปิด/ปิด Sea Level Pressure (SLP) รายจังหวัด เปิดเพื่อให้ผลที่ดีกว่า
+USE_SEA_LEVEL_PRESSURE_BY_STATION = {
+    1: True,   # เพชรบุรี
+    2: False,  # สมุทรสงคราม f
+    3: False,  # สมุทรสาคร f
+    4: True,   # ชลบุรี
+    5: False,   # สมุทรปราการ
+}
 
-    "chlor_log_lag1",
-    "chlor_log_lag2",
-    "chlor_log_lag3",
-
-    "rainfall_lag1",
-    "rainfall_lag2",
-    "rainfall_lag3",
-
-    "wind_speed_lag1",
-    "wind_speed_lag2",
-    "wind_speed_lag3",
-]
-
-
-ENVIRONMENT_RELATIONSHIP_FEATURES = HISTORY_FEATURES + [
-    "sst_sq",
-    "chlor_log_sq",
-    "sst_chlor",
-
-    "sst_delta1",
-    "chlor_delta1",
-
-    "rainfall_delta1",
-    "wind_speed_delta1",
-
-    "sst_anomaly",
-    "chlor_anomaly",
-
-    "rainfall_anomaly",
-    "wind_speed_anomaly",
-]
+# Monsoon เป็นตัวแปรหมวดหมู่ (Northeast / Southwest / Transition) ไม่ได้ใช้เพราะมีข้อมูลเดือน Month One-Hot(เรียนรู้ตามฤดูกาลอยู่แล้ว)
+USE_MONSOON_BY_STATION = {1: False, 2: False, 3: False, 4: False, 5: False}
 
 
-ENVIRONMENT_COMBINED_FEATURES = HISTORY_FEATURES + [
-    # SST
-    "sst_lag1",
-    "sst_lag2",
-    "sst_lag3",
+OUTPUT_DIR = Path(__file__).resolve().parent / "output"
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    # Chlorophyll
-    "chlor_log_lag1",
-    "chlor_log_lag2",
-    "chlor_log_lag3",
-
-    # Rainfall
-    "rainfall_lag1",
-    "rainfall_lag2",
-    "rainfall_lag3",
-
-    # Wind
-    "wind_speed_lag1",
-    "wind_speed_lag2",
-    "wind_speed_lag3",
-
-    # Nonlinear
-    "sst_sq",
-    "chlor_log_sq",
-    "sst_chlor",
-
-    # Change
-    "sst_delta1",
-    "chlor_delta1",
-    "rainfall_delta1",
-    "wind_speed_delta1",
-
-    # Anomaly
-    "sst_anomaly",
-    "chlor_anomaly",
-    "rainfall_anomaly",
-    "wind_speed_anomaly",
-]
-
-
-ECOLOGY_FEATURES = HISTORY_FEATURES + [
-    "sst_lag2",
-    "sst_lag3",
-    "chlor_log_lag1",
-
-    "rainfall_lag1",
-    "rainfall_lag2",
-
-    "wind_speed_lag1",
-
-    "sst_distance_30_5",
-    "sst_distance_sq",
-    "sst_in_gulf_range",
-
-    "sst_chlor",
-]
-
-
-PLS_RELATIONSHIP_FEATURES = (
-    ENVIRONMENT_COMBINED_FEATURES
-    + MONTH_DUMMY_FEATURES
-)
-
-
-# =========================================================
-# PROVINCE ALIASES
-# =========================================================
-
-PROVINCE_ALIASES = {
-    "เพชรบุรี": {"เพชรบุรี", "เพรชบุรี"},
-    "เพรชบุรี": {"เพชรบุรี", "เพรชบุรี"},
+MONTH_NAMES_TH = {
+    1: "มกราคม",
+    2: "กุมภาพันธ์",
+    3: "มีนาคม",
+    4: "เมษายน",
+    5: "พฤษภาคม",
+    6: "มิถุนายน",
+    7: "กรกฎาคม",
+    8: "สิงหาคม",
+    9: "กันยายน",
+    10: "ตุลาคม",
+    11: "พฤศจิกายน",
+    12: "ธันวาคม",
 }
 
 
-# =========================================================
-# MODEL BUNDLE
-# =========================================================
-
-@dataclass
-class ModelBundle:
-    name: str
-    features: List[str]
-    target_transform: str
-    imputer: SimpleImputer
-    scaler: Optional[StandardScaler]
-    model: Any
-    model_type: str
-    alpha: float
-    blend_weight: float
-    n_components: int = 0
-
-
-# =========================================================
-# JSON HELPERS
-# =========================================================
-
-def send_json(data: Dict[str, Any]) -> None:
-    print(
-        json.dumps(
-            data,
-            ensure_ascii=False,
-            allow_nan=False
-        )
-    )
-
-
-def finite_or_none(value: Any) -> Optional[float]:
+# 2) ฟังก์ชันพื้นฐาน
+def configure_stdout() -> None:
     try:
-        value = float(value)
-
-        if math.isfinite(value):
-            return value
-
-        return None
-
-    except Exception:
-        return None
-
-
-# =========================================================
-# ARGUMENTS
-# =========================================================
-
-def decode_province(
-    value: str,
-    is_base64: bool = False
-) -> str:
-
-    if is_base64:
-        try:
-            return base64.b64decode(value).decode(
-                "utf-8"
-            ).strip()
-
-        except Exception:
-            pass
-
-    return value.strip()
-
-
-def read_args() -> Tuple[str, int, int]:
-
-    if len(sys.argv) < 4:
-        raise ValueError(
-            "Missing arguments: province, year, month"
-        )
-
-    is_base64 = (
-        len(sys.argv) >= 5
-        and sys.argv[4] == "--b64"
-    )
-
-    province = decode_province(
-        sys.argv[1],
-        is_base64
-    )
-
-    try:
-        year = int(sys.argv[2])
-        month = int(sys.argv[3])
-
-    except ValueError as exc:
-        raise ValueError(
-            "Year and month must be numbers"
-        ) from exc
-
-    if not province:
-        raise ValueError("Province is empty")
-
-    if year < MIN_ALLOWED_YEAR or year > MAX_ALLOWED_YEAR:
-        raise ValueError(
-            f"Year must be {MIN_ALLOWED_YEAR}-{MAX_ALLOWED_YEAR}"
-        )
-
-    if month < 1 or month > 12:
-        raise ValueError("Month must be 1-12")
-
-    return province, year, month
-
-
-# =========================================================
-# DATABASE CONFIG
-# =========================================================
-
-def read_php_database_config() -> Dict[str, Any]:
-
-    config: Dict[str, Any] = {
-        "host": os.getenv(
-            "PROJECTA_DB_HOST",
-            "127.0.0.1"
-        ),
-        "database": os.getenv(
-            "PROJECTA_DB_NAME",
-            "projecta"
-        ),
-        "user": os.getenv(
-            "PROJECTA_DB_USER",
-            "root"
-        ),
-        "password": os.getenv(
-            "PROJECTA_DB_PASSWORD",
-            ""
-        ),
-        "port": int(
-            os.getenv(
-                "PROJECTA_DB_PORT",
-                "3306"
-            )
-        ),
-    }
-
-    if not os.path.exists(PHP_DB_CONFIG):
-        return config
-
-    try:
-
-        content = open(
-            PHP_DB_CONFIG,
-            "r",
-            encoding="utf-8",
-            errors="ignore"
-        ).read()
-
-        patterns = {
-            "host": r"\$host\s*=\s*['\"]([^'\"]*)['\"]",
-            "database": r"\$dbname\s*=\s*['\"]([^'\"]*)['\"]",
-            "user": r"\$user\s*=\s*['\"]([^'\"]*)['\"]",
-            "password": r"\$pass\s*=\s*['\"]([^'\"]*)['\"]",
-        }
-
-        for key, pattern in patterns.items():
-
-            match = re.search(
-                pattern,
-                content
-            )
-
-            if match:
-                config[key] = match.group(1)
-
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
     except Exception:
         pass
 
-    return config
+
+def send_json(payload: Dict[str, Any]) -> None:
+    print(
+        json.dumps(
+            payload,
+            ensure_ascii=False,
+            allow_nan=False,
+        )
+    )
 
 
-# =========================================================
-# DATABASE CONNECTION
-# =========================================================
-
-def connect_database(config: Dict[str, Any]):
-
-    mysql_error: Optional[Exception] = None
-
+# 3) อ่านข้อมูลจากฐานข้อมูล
+def connect_database():
     try:
-
         import mysql.connector
-
-        connection = mysql.connector.connect(
-            host=config["host"],
-            database=config["database"],
-            user=config["user"],
-            password=config["password"],
-            port=config["port"],
-            charset="utf8mb4",
-            use_unicode=True,
-        )
-
-        return connection, "mysql-connector-python"
-
     except ImportError as exc:
-
-        mysql_error = exc
-
-    except Exception as exc:
-
         raise RuntimeError(
-            f"Cannot connect to MySQL: {exc}"
-        ) from exc
-
-
-    try:
-
-        import pymysql
-
-        connection = pymysql.connect(
-            host=config["host"],
-            db=config["database"],
-            user=config["user"],
-            password=config["password"],
-            port=config["port"],
-            charset="utf8mb4",
-            cursorclass=pymysql.cursors.DictCursor,
-        )
-
-        return connection, "PyMySQL"
-
-    except ImportError as exc:
-
-        raise RuntimeError(
-            "ไม่พบ MySQL driver สำหรับ Python "
-            "กรุณาติดตั้งด้วยคำสั่ง "
+            "ไม่พบ mysql-connector-python กรุณารัน: "
             "pip install mysql-connector-python"
-        ) from (mysql_error or exc)
-
-    except Exception as exc:
-
-        raise RuntimeError(
-            f"Cannot connect to MySQL: {exc}"
         ) from exc
 
+    return mysql.connector.connect(
+        host=os.getenv("PROJECTA_DB_HOST", "127.0.0.1"),
+        database=os.getenv("PROJECTA_DB_NAME", "projecta"),
+        user=os.getenv("PROJECTA_DB_USER", "root"),
+        password=os.getenv("PROJECTA_DB_PASSWORD", ""),
+        port=int(os.getenv("PROJECTA_DB_PORT", "3306")),
+        charset="utf8mb4",
+        use_unicode=True,
+    )
 
-# =========================================================
-# QUERY DATAFRAME
-# =========================================================
 
-def query_dataframe(
-    connection,
-    sql: str,
-    params: Sequence[Any] = ()
-) -> pd.DataFrame:
-
-    cursor = connection.cursor()
-
+def query_df(conn, sql: str, params: Sequence[Any] = ()) -> pd.DataFrame:
+    cur = conn.cursor()
     try:
-
-        cursor.execute(
-            sql,
-            tuple(params)
-        )
-
-        rows = cursor.fetchall()
-
-        columns = [
-            column[0]
-            for column in cursor.description
-        ]
-
-        return pd.DataFrame(
-            list(rows),
-            columns=columns
-        )
-
+        cur.execute(sql, tuple(params))
+        rows = cur.fetchall()
+        columns = [x[0] for x in cur.description]
+        return pd.DataFrame(rows, columns=columns)
     finally:
-
-        cursor.close()
-
-
-# =========================================================
-# NORMALIZE / STATION
-# =========================================================
-
-def normalize_name(value: str) -> str:
-
-    return re.sub(
-        r"\s+",
-        "",
-        str(value or "").strip()
-    )
+        cur.close()
 
 
-def resolve_station(
-    connection,
-    requested_province: str
-) -> Tuple[int, str]:
-
-    station_df = query_dataframe(
-        connection,
-        """
-        SELECT
-            id,
-            station_name
-        FROM station
-        WHERE status = 1
-        ORDER BY id ASC
-        """,
-    )
-
-    if station_df.empty:
-        raise ValueError(
-            "ไม่พบข้อมูลในตาราง station"
+def load_database() -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    conn = connect_database()
+    try:
+        stations = query_df(
+            conn,
+            """
+            SELECT id AS station_id, station_name
+            FROM station
+            WHERE status = 1
+              AND id BETWEEN 1 AND 5
+            ORDER BY id
+            """,
         )
 
-    requested_normalized = normalize_name(
-        requested_province
-    )
+        catch = query_df(
+            conn,
+            """
+            SELECT
+                station_id,
+                year,
+                month,
+                SUM(amount) AS catch
+            FROM catch_mackereldata
+            WHERE status = 1
+              AND station_id BETWEEN 1 AND 5
+              AND year BETWEEN %s AND %s
+            GROUP BY station_id, year, month
+            ORDER BY station_id, year, month
+            """,
+            [START_YEAR, REQUESTED_END_YEAR],
+        )
 
-    accepted_names = PROVINCE_ALIASES.get(
-        requested_province,
-        {requested_province}
-    )
+        env = query_df(
+            conn,
+            """
+            SELECT
+                station_id,
+                year,
+                month,
+                AVG(sst) AS sst,
+                AVG(chlorophyll_a) AS chlorophyll_a,
+                AVG(sss) AS sss
+            FROM marine_environment
+            WHERE status = 1
+              AND station_id BETWEEN 1 AND 5
+              AND year BETWEEN %s AND %s
+            GROUP BY station_id, year, month
+            ORDER BY station_id, year, month
+            """,
+            [START_YEAR, REQUESTED_END_YEAR],
+        )
 
-    accepted_normalized = {
-        normalize_name(name)
-        for name in accepted_names
-    }
+        weather = query_df(
+            conn,
+            """
+            SELECT
+                station_id,
+                year,
+                month,
+                AVG(rainfall) AS rainfall,
+                AVG(wind_speed) AS wind_speed,
+                AVG(sea_level_pressure) AS sea_level_pressure,
+                AVG(air_temperature) AS air_temperature,
+                AVG(wind_direction) AS wind_direction,
+                MAX(monsoon) AS monsoon,
+                MAX(season) AS season
+            FROM weather_data
+            WHERE status = 1
+              AND station_id BETWEEN 1 AND 5
+              AND year BETWEEN %s AND %s
+            GROUP BY station_id, year, month
+            ORDER BY station_id, year, month
+            """,
+            [START_YEAR, REQUESTED_END_YEAR],
+        )
+    finally:
+        conn.close()
 
-    accepted_normalized.add(
-        requested_normalized
-    )
+    if stations.empty:
+        raise ValueError("ไม่พบข้อมูล station")
+    if catch.empty:
+        raise ValueError("ไม่พบข้อมูล catch_mackereldata")
+    if env.empty:
+        raise ValueError("ไม่พบข้อมูล marine_environment")
+    if weather.empty:
+        raise ValueError("ไม่พบข้อมูล weather_data")
 
-    for row in station_df.itertuples(
-        index=False
-    ):
-
-        if normalize_name(
-            row.station_name
-        ) in accepted_normalized:
-
-            return (
-                int(row.id),
-                str(row.station_name).strip()
-            )
-
-    available = ", ".join(
-        station_df["station_name"]
+    stations["station_id"] = pd.to_numeric(
+        stations["station_id"], errors="raise"
+    ).astype(int)
+    stations["station_name"] = (
+        stations["station_name"]
         .astype(str)
-        .tolist()
+        .str.strip()
     )
 
-    raise ValueError(
-        f"ไม่พบจังหวัดดังกล่าว: "
-        f"{requested_province} "
-        f"(มีข้อมูล: {available})"
-    )
-
-
-# =========================================================
-# ENVIRONMENT IMPUTATION
-# =========================================================
-
-def impute_environment_from_same_month(
-    env_df: pd.DataFrame
-) -> Tuple[pd.DataFrame, Dict[str, Any]]:
-
-    """
-    เติมค่าที่หายของ environmental variables
-
-    SST / Chlorophyll-a:
-        blank / non-finite / <= 0 = invalid
-
-    Rainfall / Wind Speed:
-        blank / non-finite = invalid
-
-    เพราะ rainfall = 0 และ wind_speed = 0
-    สามารถเป็นค่าจริงได้ จึงไม่ถือว่า 0 เป็น missing
-    """
-
-    frame = env_df.copy()
-
-    summary: Dict[str, Any] = {
-        "method": (
-            "Same-station, same-calendar-month median "
-            "from available years; station median fallback"
-        ),
-    }
-
-    positive_columns = [
-        "sst",
-        "chlorophyll_a",
-    ]
-
-    nonnegative_columns = [
-        "rainfall",
-        "wind_speed",
-    ]
-
-    # -----------------------------------------------------
-    # SST / CHLOROPHYLL
-    # -----------------------------------------------------
-
-    for column in positive_columns:
-
-        frame[column] = pd.to_numeric(
-            frame[column],
-            errors="coerce"
-        )
-
-        frame[f"{column}_raw"] = frame[column]
-
-        numeric = frame[column].to_numpy(
-            dtype=float
-        )
-
-        invalid_mask = (
-            frame[column].isna()
-            | ~np.isfinite(numeric)
-            | (frame[column] <= 0)
-        )
-
-        invalid_count = int(
-            invalid_mask.sum()
-        )
-
-        frame.loc[
-            invalid_mask,
-            column
-        ] = np.nan
-
-        month_medians = (
-            frame
-            .groupby(
-                "month",
-                observed=False
-            )[column]
-            .median()
-        )
-
-        station_median = finite_or_none(
-            frame[column].median()
-        )
-
-        if (
-            station_median is None
-            or station_median <= 0
-        ):
-            raise ValueError(
-                f"ไม่มีค่าที่ใช้เติมข้อมูล {column}"
-            )
-
-        replacements = frame.loc[
-            invalid_mask,
-            "month"
-        ].map(month_medians)
-
-        same_month_count = int(
-            replacements.notna().sum()
-        )
-
-        fallback_count = int(
-            replacements.isna().sum()
-        )
-
-        replacements = replacements.fillna(
-            station_median
-        )
-
-        frame.loc[
-            invalid_mask,
-            column
-        ] = replacements.to_numpy(
-            dtype=float
-        )
-
-        if (
-            frame[column].isna().any()
-            or (frame[column] <= 0).any()
-        ):
-            raise ValueError(
-                f"ไม่สามารถเติมข้อมูลที่ขาดหายของ "
-                f"{column} ได้ครบ"
-            )
-
-        flag_column = f"{column}_imputed"
-
-        frame[flag_column] = (
-            invalid_mask.astype(int)
-        )
-
-        summary[
-            f"{column}_imputed_months"
-        ] = invalid_count
-
-        summary[
-            f"{column}_same_month_fills"
-        ] = same_month_count
-
-        summary[
-            f"{column}_fallback_fills"
-        ] = fallback_count
-
-
-    # -----------------------------------------------------
-    # RAINFALL / WIND SPEED
-    # -----------------------------------------------------
-
-    for column in nonnegative_columns:
-
-        frame[column] = pd.to_numeric(
-            frame[column],
-            errors="coerce"
-        )
-
-        frame[f"{column}_raw"] = frame[column]
-
-        numeric = frame[column].to_numpy(
-            dtype=float
-        )
-
-        invalid_mask = (
-            frame[column].isna()
-            | ~np.isfinite(numeric)
-        )
-
-        invalid_count = int(
-            invalid_mask.sum()
-        )
-
-        frame.loc[
-            invalid_mask,
-            column
-        ] = np.nan
-
-        month_medians = (
-            frame
-            .groupby(
-                "month",
-                observed=False
-            )[column]
-            .median()
-        )
-
-        station_median = finite_or_none(
-            frame[column].median()
-        )
-
-        if station_median is None:
-            raise ValueError(
-                f"ไม่มีค่าที่ใช้เติมข้อมูล {column}"
-            )
-
-        replacements = frame.loc[
-            invalid_mask,
-            "month"
-        ].map(month_medians)
-
-        same_month_count = int(
-            replacements.notna().sum()
-        )
-
-        fallback_count = int(
-            replacements.isna().sum()
-        )
-
-        replacements = replacements.fillna(
-            station_median
-        )
-
-        frame.loc[
-            invalid_mask,
-            column
-        ] = replacements.to_numpy(
-            dtype=float
-        )
-
-        if frame[column].isna().any():
-            raise ValueError(
-                f"ไม่สามารถเติมข้อมูลที่ขาดหายของ "
-                f"{column} ได้ครบ"
-            )
-
-        flag_column = f"{column}_imputed"
-
-        frame[flag_column] = (
-            invalid_mask.astype(int)
-        )
-
-        summary[
-            f"{column}_imputed_months"
-        ] = invalid_count
-
-        summary[
-            f"{column}_same_month_fills"
-        ] = same_month_count
-
-        summary[
-            f"{column}_fallback_fills"
-        ] = fallback_count
-
-
-    return frame, summary
-
-
-# =========================================================
-# LOAD DATABASE DATA
-# =========================================================
-
-def load_database_data(
-    connection,
-    station_id: int
-) -> Tuple[pd.DataFrame, Dict[str, Any]]:
-
-    # -----------------------------------------------------
-    # CATCH
-    # -----------------------------------------------------
-
-    catch_sql = """
-        SELECT
-            year,
-            month,
-            SUM(amount) AS catch
-        FROM catch_mackereldata
-        WHERE station_id = %s
-          AND status = 1
-        GROUP BY year, month
-        ORDER BY year, month
-    """
-
-
-    # -----------------------------------------------------
-    # MARINE ENVIRONMENT
-    # -----------------------------------------------------
-
-    environment_sql = """
-        SELECT
-            year,
-            month,
-            AVG(sst) AS sst,
-            AVG(chlorophyll_a) AS chlorophyll_a
-        FROM marine_environment
-        WHERE station_id = %s
-          AND status = 1
-        GROUP BY year, month
-        ORDER BY year, month
-    """
-
-
-    # -----------------------------------------------------
-    # WEATHER
-    # -----------------------------------------------------
-
-    weather_sql = """
-        SELECT
-            year,
-            month,
-            AVG(rainfall) AS rainfall,
-            AVG(wind_speed) AS wind_speed
-        FROM weather_data
-        WHERE station_id = %s
-          AND status = 1
-        GROUP BY year, month
-        ORDER BY year, month
-    """
-
-
-    catch_df = query_dataframe(
-        connection,
-        catch_sql,
-        [station_id]
-    )
-
-    env_df = query_dataframe(
-        connection,
-        environment_sql,
-        [station_id]
-    )
-
-    weather_df = query_dataframe(
-        connection,
-        weather_sql,
-        [station_id]
-    )
-
-
-    if catch_df.empty:
-        raise ValueError(
-            "จังหวัดนี้ไม่มีข้อมูลใน catch_mackereldata"
-        )
-
-    if env_df.empty:
-        raise ValueError(
-            "จังหวัดนี้ไม่มีข้อมูลใน marine_environment"
-        )
-
-    if weather_df.empty:
-        raise ValueError(
-            "จังหวัดนี้ไม่มีข้อมูลใน weather_data"
-        )
-
-
-    # -----------------------------------------------------
-    # NUMERIC CONVERSION
-    # -----------------------------------------------------
-
-    for column in [
-        "year",
-        "month",
+    for frame, columns in [
+        (catch, ["station_id", "year", "month", "catch"]),
+        (env, ["station_id", "year", "month", "sst", "chlorophyll_a", "sss"]),
+        (weather, [
+            "station_id", "year", "month", "rainfall", "wind_speed",
+            "sea_level_pressure", "air_temperature", "wind_direction"
+        ]),
     ]:
+        for column in columns:
+            frame[column] = pd.to_numeric(frame[column], errors="coerce")
 
-        catch_df[column] = pd.to_numeric(
-            catch_df[column],
-            errors="coerce"
+    catch = catch.dropna(
+        subset=["station_id", "year", "month", "catch"]
+    ).copy()
+    env = env.dropna(
+        subset=["station_id", "year", "month", "sst", "chlorophyll_a", "sss"]
+    ).copy()
+    weather = weather.dropna(
+        subset=[
+            "station_id", "year", "month", "rainfall", "wind_speed",
+            "sea_level_pressure", "air_temperature", "wind_direction", "monsoon"
+        ]
+    ).copy()
+
+    for frame in [catch, env, weather]:
+        frame[["station_id", "year", "month"]] = (
+            frame[["station_id", "year", "month"]].astype(int)
         )
 
-        env_df[column] = pd.to_numeric(
-            env_df[column],
-            errors="coerce"
+    catch["catch"] = catch["catch"].astype(float).clip(lower=0.0)
+    env["sst"] = env["sst"].astype(float)
+    env["chlorophyll_a"] = env["chlorophyll_a"].astype(float)
+    env["sss"] = env["sss"].astype(float)
+    weather["rainfall"] = weather["rainfall"].astype(float)
+    weather["wind_speed"] = weather["wind_speed"].astype(float)
+    weather["sea_level_pressure"] = weather["sea_level_pressure"].astype(float)
+    weather["air_temperature"] = weather["air_temperature"].astype(float)
+    weather["wind_direction"] = weather["wind_direction"].astype(float)
+    weather["monsoon"] = weather["monsoon"].astype(str).str.strip()
+    weather["season"] = weather["season"].astype(str)
+
+    return stations, catch, env, weather
+
+
+# 4) เตรียมและรวมข้อมูล
+def station_for_province(stations: pd.DataFrame, province: str) -> Tuple[int, str]:
+    province = str(province).strip()
+    match = stations[stations["station_name"] == province]
+    if match.empty:
+        available = ", ".join(stations["station_name"].astype(str).tolist())
+        raise ValueError(
+            f"ไม่พบจังหวัด '{province}' ใน station; จังหวัดที่ใช้ได้: {available}"
         )
-
-        weather_df[column] = pd.to_numeric(
-            weather_df[column],
-            errors="coerce"
-        )
+    row = match.iloc[0]
+    return int(row["station_id"]), str(row["station_name"])
 
 
-    catch_df["catch"] = pd.to_numeric(
-        catch_df["catch"],
-        errors="coerce"
-    )
-
-    env_df["sst"] = pd.to_numeric(
-        env_df["sst"],
-        errors="coerce"
-    )
-
-    env_df["chlorophyll_a"] = pd.to_numeric(
-        env_df["chlorophyll_a"],
-        errors="coerce"
-    )
-
-    weather_df["rainfall"] = pd.to_numeric(
-        weather_df["rainfall"],
-        errors="coerce"
-    )
-
-    weather_df["wind_speed"] = pd.to_numeric(
-        weather_df["wind_speed"],
-        errors="coerce"
-    )
-
-
-    catch_df = catch_df.dropna(
-        subset=[
-            "year",
-            "month",
-            "catch"
-        ]
-    )
-
-    env_df = env_df.dropna(
-        subset=[
-            "year",
-            "month"
-        ]
-    )
-
-    weather_df = weather_df.dropna(
-        subset=[
-            "year",
-            "month"
-        ]
-    )
-
-
-    catch_df[
-        ["year", "month"]
-    ] = catch_df[
-        ["year", "month"]
-    ].astype(int)
-
-    env_df[
-        ["year", "month"]
-    ] = env_df[
-        ["year", "month"]
-    ].astype(int)
-
-    weather_df[
-        ["year", "month"]
-    ] = weather_df[
-        ["year", "month"]
-    ].astype(int)
-
-
-    # -----------------------------------------------------
-    # MERGE MARINE + WEATHER
-    # -----------------------------------------------------
-
-    # สำคัญ:
-    # marine_environment และ weather_data
-    # ถูก aggregate เป็น year/month แล้ว
-    # จึงป้องกัน many-to-many multiplication
-
-    env_df = env_df.merge(
-        weather_df[
+def common_feature_rows(env: pd.DataFrame, weather: pd.DataFrame) -> pd.DataFrame:
+    """รวมข้อมูลสิ่งแวดล้อม + อากาศ รวม SLP และ Monsoon สำหรับทดลองโมเดล"""
+    feature_rows = env[
+        ["station_id", "year", "month", "sst", "chlorophyll_a", "sss"]
+    ].merge(
+        weather[
             [
+                "station_id",
                 "year",
                 "month",
                 "rainfall",
                 "wind_speed",
+                "sea_level_pressure",
+                "air_temperature",
+                "wind_direction",
+                "monsoon",
+                "season",
             ]
         ],
-        on=[
-            "year",
-            "month"
-        ],
-        how="outer",
+        on=["station_id", "year", "month"],
+        how="inner",
     )
-
-
-    env_df = (
-        env_df
-        .sort_values(
-            [
-                "year",
-                "month"
-            ]
-        )
-        .drop_duplicates(
-            [
-                "year",
-                "month"
-            ],
-            keep="last"
-        )
-        .reset_index(drop=True)
-    )
-
-
-    # -----------------------------------------------------
-    # IMPUTE ENVIRONMENT
-    # -----------------------------------------------------
-
-    env_df, environment_imputation = (
-        impute_environment_from_same_month(
-            env_df
-        )
-    )
-
-
-    # -----------------------------------------------------
-    # MERGE CATCH
-    # -----------------------------------------------------
-
-    data = env_df.merge(
-        catch_df,
-        on=[
-            "year",
-            "month"
-        ],
-        how="left"
-    )
-
-
-    zero_filled = int(
-        data["catch"].isna().sum()
-    )
-
-
-    # ถ้าไม่มี record ใน catch table
-    # ถือว่าเดือนนั้นไม่มีการบันทึก catch = 0
-
-    data["catch"] = (
-        data["catch"]
-        .fillna(0.0)
-        .clip(lower=0.0)
-    )
-
-
-    # -----------------------------------------------------
-    # FILTER
-    # -----------------------------------------------------
-
-    data = data[
-        data["month"].between(1, 12)
-        & data["year"].between(
-            MIN_ALLOWED_YEAR,
-            MAX_ALLOWED_YEAR
-        )
-    ].copy()
-
-
-    data = (
-        data
-        .sort_values(
-            [
-                "year",
-                "month"
-            ]
-        )
-        .drop_duplicates(
-            [
-                "year",
-                "month"
-            ]
-        )
-    )
-
-
-    data.reset_index(
-        drop=True,
-        inplace=True
-    )
-
-
-    if len(data) < 24:
-        raise ValueError(
-            "ข้อมูลที่จับคู่กันมีน้อยกว่า 24 เดือน "
-            "ไม่เพียงพอสำหรับเทรนและทดสอบ"
-        )
-
-
-    # -----------------------------------------------------
-    # SOURCE COUNTS
-    # -----------------------------------------------------
-
-    source_counts = {
-        "catch_months": int(
-            len(catch_df)
-        ),
-
-        "environment_months": int(
-            len(env_df)
-        ),
-
-        "weather_months": int(
-            len(weather_df)
-        ),
-
-        "merged_months": int(
-            len(data)
-        ),
-
-        "zero_filled_months": zero_filled,
-
-        "sst_imputed_months": int(
-            environment_imputation.get(
-                "sst_imputed_months",
-                0
-            )
-        ),
-
-        "sst_same_month_fills": int(
-            environment_imputation.get(
-                "sst_same_month_fills",
-                0
-            )
-        ),
-
-        "chlorophyll_a_imputed_months": int(
-            environment_imputation.get(
-                "chlorophyll_a_imputed_months",
-                0
-            )
-        ),
-
-        "chlorophyll_a_same_month_fills": int(
-            environment_imputation.get(
-                "chlorophyll_a_same_month_fills",
-                0
-            )
-        ),
-
-        "rainfall_imputed_months": int(
-            environment_imputation.get(
-                "rainfall_imputed_months",
-                0
-            )
-        ),
-
-        "rainfall_same_month_fills": int(
-            environment_imputation.get(
-                "rainfall_same_month_fills",
-                0
-            )
-        ),
-
-        "wind_speed_imputed_months": int(
-            environment_imputation.get(
-                "wind_speed_imputed_months",
-                0
-            )
-        ),
-
-        "wind_speed_same_month_fills": int(
-            environment_imputation.get(
-                "wind_speed_same_month_fills",
-                0
-            )
-        ),
-
-        "environment_imputation_method": str(
-            environment_imputation.get(
-                "method",
-                ""
-            )
-        ),
-
-        "environment_features": [
-            "SST",
-            "Chlorophyll-a",
-            "Rainfall",
-            "Wind Speed",
-        ],
-    }
-
-
-    return data, source_counts
-
-
-# =========================================================
-# REFRESH ENVIRONMENT FEATURES
-# =========================================================
-
-def refresh_environment_features(
-    frame: pd.DataFrame
-) -> pd.DataFrame:
-
-    """
-    Create environmental lag / relationship features.
-
-    Does not use future catch.
-    """
-
-    result = (
-        frame
-        .sort_values(
-            [
-                "year",
-                "month"
-            ]
-        )
-        .copy()
-    )
-
-
-    # -----------------------------------------------------
-    # CHLOROPHYLL TRANSFORM
-    # -----------------------------------------------------
-
-    result["chlor_log"] = np.log1p(
-        result["chlorophyll_a"].clip(
-            lower=0.0
-        )
-    )
-
-
-    # -----------------------------------------------------
-    # ENVIRONMENT LAGS
-    # -----------------------------------------------------
-
-    for lag in [1, 2, 3]:
-
-        result[
-            f"sst_lag{lag}"
-        ] = result["sst"].shift(lag)
-
-        result[
-            f"chlor_log_lag{lag}"
-        ] = result["chlor_log"].shift(lag)
-
-        result[
-            f"rainfall_lag{lag}"
-        ] = result["rainfall"].shift(lag)
-
-        result[
-            f"wind_speed_lag{lag}"
-        ] = result["wind_speed"].shift(lag)
-
-
-    # -----------------------------------------------------
-    # MONTHLY CHANGE
-    # -----------------------------------------------------
-
-    result["sst_delta1"] = (
-        result["sst"]
-        - result["sst"].shift(1)
-    )
-
-    result["chlor_delta1"] = (
-        result["chlor_log"]
-        - result["chlor_log"].shift(1)
-    )
-
-    result["rainfall_delta1"] = (
-        result["rainfall"]
-        - result["rainfall"].shift(1)
-    )
-
-    result["wind_speed_delta1"] = (
-        result["wind_speed"]
-        - result["wind_speed"].shift(1)
-    )
-
-
-    # -----------------------------------------------------
-    # NONLINEAR FEATURES
-    # -----------------------------------------------------
-
-    result["sst_sq"] = (
-        result["sst"] ** 2
-    )
-
-    result["chlor_log_sq"] = (
-        result["chlor_log"] ** 2
-    )
-
-    result["sst_chlor"] = (
-        result["sst"]
-        * result["chlor_log"]
-    )
-
-
-    # -----------------------------------------------------
-    # SEASONAL PRIOR MEANS
-    # -----------------------------------------------------
-
-    result[
-        "sst_month_prior_mean"
-    ] = result.groupby(
-        "month"
-    )["sst"].transform(
-        lambda values:
-        values.shift(1)
-        .expanding(
-            min_periods=1
-        )
-        .mean()
-    )
-
-
-    result[
-        "chlor_month_prior_mean"
-    ] = result.groupby(
-        "month"
-    )["chlor_log"].transform(
-        lambda values:
-        values.shift(1)
-        .expanding(
-            min_periods=1
-        )
-        .mean()
-    )
-
-
-    result[
-        "rainfall_month_prior_mean"
-    ] = result.groupby(
-        "month"
-    )["rainfall"].transform(
-        lambda values:
-        values.shift(1)
-        .expanding(
-            min_periods=1
-        )
-        .mean()
-    )
-
-
-    result[
-        "wind_speed_month_prior_mean"
-    ] = result.groupby(
-        "month"
-    )["wind_speed"].transform(
-        lambda values:
-        values.shift(1)
-        .expanding(
-            min_periods=1
-        )
-        .mean()
-    )
-
-
-    # -----------------------------------------------------
-    # ANOMALIES
-    # -----------------------------------------------------
-
-    result["sst_anomaly"] = (
-        result["sst"]
-        - result["sst_month_prior_mean"]
-    )
-
-    result["chlor_anomaly"] = (
-        result["chlor_log"]
-        - result["chlor_month_prior_mean"]
-    )
-
-    result["rainfall_anomaly"] = (
-        result["rainfall"]
-        - result["rainfall_month_prior_mean"]
-    )
-
-    result["wind_speed_anomaly"] = (
-        result["wind_speed"]
-        - result["wind_speed_month_prior_mean"]
-    )
-
-
-    # -----------------------------------------------------
-    # SST PREFERRED RANGE
-    # -----------------------------------------------------
-
-    result[
-        "sst_distance_30_5"
-    ] = np.abs(
-        result["sst"] - 30.5
-    )
-
-    result[
-        "sst_distance_sq"
-    ] = (
-        result["sst"] - 30.5
-    ) ** 2
-
-    result[
-        "sst_in_gulf_range"
-    ] = (
-        result["sst"]
-        .between(
-            29.5,
-            31.5
-        )
-        .astype(float)
-    )
-
-
-    return result
-
-
-# =========================================================
-# TRAIN / TEST ENVIRONMENT IMPUTATION
-# =========================================================
-
-def impute_environment_for_training(
-    train_df: pd.DataFrame,
-    test_df: pd.DataFrame,
-) -> Tuple[
-    pd.DataFrame,
-    pd.DataFrame
-]:
-
-    """
-    Fit missing-value replacement using training rows only.
-
-    This prevents future/test environmental values
-    from influencing training imputation.
-    """
-
-    train = train_df.copy()
-    test = test_df.copy()
-
-
-    positive_columns = [
-        "sst",
-        "chlorophyll_a",
-    ]
-
-    nonnegative_columns = [
-        "rainfall",
-        "wind_speed",
-    ]
-
-
-    # -----------------------------------------------------
-    # SST / CHLOROPHYLL
-    # -----------------------------------------------------
-
-    for column in positive_columns:
-
-        raw_column = f"{column}_raw"
-
-        train_values = pd.to_numeric(
-            (
-                train[raw_column]
-                if raw_column in train.columns
-                else train[column]
-            ),
-            errors="coerce"
-        )
-
-        test_values = pd.to_numeric(
-            (
-                test[raw_column]
-                if raw_column in test.columns
-                else test[column]
-            ),
-            errors="coerce"
-        )
-
-
-        train_values = train_values.mask(
-            ~np.isfinite(train_values)
-            | (train_values <= 0)
-        )
-
-        test_values = test_values.mask(
-            ~np.isfinite(test_values)
-            | (test_values <= 0)
-        )
-
-
-        month_medians = (
-            pd.DataFrame(
-                {
-                    "month": train["month"],
-                    "value": train_values
-                }
-            )
-            .groupby("month")["value"]
-            .median()
-        )
-
-
-        global_median = finite_or_none(
-            train_values.median()
-        )
-
-
-        if (
-            global_median is None
-            or global_median <= 0
-        ):
-            raise ValueError(
-                f"ไม่มีค่าฝึกที่ใช้เติมข้อมูล {column}"
-            )
-
-
-        train[column] = (
-            train_values
-            .fillna(
-                train["month"].map(
-                    month_medians
-                )
-            )
-            .fillna(global_median)
-        )
-
-
-        test[column] = (
-            test_values
-            .fillna(
-                test["month"].map(
-                    month_medians
-                )
-            )
-            .fillna(global_median)
-        )
-
-
-    # -----------------------------------------------------
-    # RAINFALL / WIND SPEED
-    # -----------------------------------------------------
-
-    for column in nonnegative_columns:
-
-        raw_column = f"{column}_raw"
-
-        train_values = pd.to_numeric(
-            (
-                train[raw_column]
-                if raw_column in train.columns
-                else train[column]
-            ),
-            errors="coerce"
-        )
-
-        test_values = pd.to_numeric(
-            (
-                test[raw_column]
-                if raw_column in test.columns
-                else test[column]
-            ),
-            errors="coerce"
-        )
-
-
-        train_values = train_values.mask(
-            ~np.isfinite(train_values)
-        )
-
-        test_values = test_values.mask(
-            ~np.isfinite(test_values)
-        )
-
-
-        month_medians = (
-            pd.DataFrame(
-                {
-                    "month": train["month"],
-                    "value": train_values
-                }
-            )
-            .groupby("month")["value"]
-            .median()
-        )
-
-
-        global_median = finite_or_none(
-            train_values.median()
-        )
-
-
-        if global_median is None:
-            raise ValueError(
-                f"ไม่มีค่าฝึกที่ใช้เติมข้อมูล {column}"
-            )
-
-
-        train[column] = (
-            train_values
-            .fillna(
-                train["month"].map(
-                    month_medians
-                )
-            )
-            .fillna(global_median)
-        )
-
-
-        test[column] = (
-            test_values
-            .fillna(
-                test["month"].map(
-                    month_medians
-                )
-            )
-            .fillna(global_median)
-        )
-
-
-    # -----------------------------------------------------
-    # REBUILD ENVIRONMENT FEATURES
-    # -----------------------------------------------------
-
-    train["__split"] = "train"
-    test["__split"] = "test"
-
-
-    combined = refresh_environment_features(
-        pd.concat(
-            [
-                train,
-                test
-            ],
-            ignore_index=True
-        )
-    )
-
-
-    train_result = (
-        combined[
-            combined["__split"] == "train"
-        ]
-        .drop(
-            columns="__split"
-        )
-        .copy()
-    )
-
-
-    test_result = (
-        combined[
-            combined["__split"] == "test"
-        ]
-        .drop(
-            columns="__split"
-        )
-        .copy()
-    )
-
-
-    return train_result, test_result
-
-
-# =========================================================
-# ADD CATCH FEATURES
-# =========================================================
-
-def add_features(
-    data: pd.DataFrame
-) -> pd.DataFrame:
-
-    frame = (
-        data
-        .sort_values(
-            [
-                "year",
-                "month"
-            ]
-        )
-        .copy()
-    )
-
-    min_year = int(
-        frame["year"].min()
-    )
-
-
-    # -----------------------------------------------------
-    # SEASONAL
-    # -----------------------------------------------------
-
-    frame["month_sin"] = np.sin(
-        2.0
-        * np.pi
-        * frame["month"]
-        / 12.0
-    )
-
-    frame["month_cos"] = np.cos(
-        2.0
-        * np.pi
-        * frame["month"]
-        / 12.0
-    )
-
-
-    frame["year_index"] = (
-        frame["year"]
-        - min_year
-    )
-
-
-    # -----------------------------------------------------
-    # MONTH DUMMIES
-    # -----------------------------------------------------
-
-    for month_number in range(2, 13):
-
-        frame[
-            f"month_{month_number}"
-        ] = (
-            frame["month"]
-            == month_number
-        ).astype(float)
-
-
-    # -----------------------------------------------------
-    # CATCH HISTORY
-    # -----------------------------------------------------
-
-    frame["lag12"] = (
-        frame["catch"].shift(12)
-    )
-
-
-    frame["month_avg_prior"] = (
-        frame
-        .groupby("month")["catch"]
-        .transform(
-            lambda values:
-            values
-            .shift(1)
-            .expanding(
-                min_periods=1
-            )
-            .mean()
-        )
-    )
-
-
-    frame["month_median_prior"] = (
-        frame
-        .groupby("month")["catch"]
-        .transform(
-            lambda values:
-            values
-            .shift(1)
-            .expanding(
-                min_periods=1
-            )
-            .median()
-        )
-    )
-
-
-    return refresh_environment_features(
-        frame
-    )
-
-
-# =========================================================
-# FIT MODEL
-# =========================================================
-
-def fit_model(
-    train_df: pd.DataFrame,
-    name: str,
-    features: List[str],
-    target_transform: str,
-    model_type: str = "ols",
-    alpha: float = 0.0,
-    blend_weight: float = 1.0,
-    n_components: int = 0,
-) -> ModelBundle:
-
-    normalized_model_type = (
-        str(model_type).lower()
-    )
-
-
-    minimum_rows = max(
-        12,
-        len(features) + 3
-    )
-
-
-    if normalized_model_type == "pls":
-
-        minimum_rows = max(
-            24,
-            int(n_components) + 5
-        )
-
-
-    if len(train_df) < minimum_rows:
-
-        raise ValueError(
-            "Training data is insufficient "
-            "for the selected feature set"
-        )
-
-
-    # -----------------------------------------------------
-    # IMPUTER
-    # -----------------------------------------------------
-
-    imputer = SimpleImputer(
-        strategy="median"
-    )
-
-
-    x_train = imputer.fit_transform(
-        train_df[features]
-    )
-
-
-    y_train = train_df[
-        "catch"
-    ].to_numpy(
-        dtype=float
-    )
-
-
-    # -----------------------------------------------------
-    # TARGET
-    # -----------------------------------------------------
-
-    if target_transform == "log1p":
-
-        y_model = np.log1p(
-            np.maximum(
-                y_train,
-                0.0
-            )
-        )
-
-    else:
-
-        y_model = y_train
-
-
-    scaler: Optional[
-        StandardScaler
-    ] = None
-
-    resolved_components = 0
-
-
-    # -----------------------------------------------------
-    # RIDGE
-    # -----------------------------------------------------
-
-    if normalized_model_type == "ridge":
-
-        scaler = StandardScaler()
-
-        x_model = scaler.fit_transform(
-            x_train
-        )
-
-        model: Any = Ridge(
-            alpha=max(
-                float(alpha),
-                1e-9
-            )
-        )
-
-        model.fit(
-            x_model,
-            y_model
-        )
-
-
-    # -----------------------------------------------------
-    # PLS
-    # -----------------------------------------------------
-
-    elif normalized_model_type == "pls":
-
-        scaler = StandardScaler()
-
-        x_model = scaler.fit_transform(
-            x_train
-        )
-
-        resolved_components = max(
-            1,
-            min(
-                int(
-                    n_components or 1
-                ),
-                x_model.shape[1],
-                max(
-                    x_model.shape[0] - 1,
-                    1
-                ),
-            ),
-        )
-
-
-        model = PLSRegression(
-            n_components=resolved_components,
-            scale=False,
-            max_iter=1000,
-        )
-
-
-        model.fit(
-            x_model,
-            y_model.reshape(-1, 1)
-        )
-
-        alpha = 0.0
-
-
-    # -----------------------------------------------------
-    # OLS
-    # -----------------------------------------------------
-
-    else:
-
-        x_model = x_train
-
-        model = LinearRegression()
-
-        normalized_model_type = "ols"
-
-        alpha = 0.0
-
-        model.fit(
-            x_model,
-            y_model
-        )
-
-
-    return ModelBundle(
-        name=name,
-        features=list(features),
-        target_transform=target_transform,
-        imputer=imputer,
-        scaler=scaler,
-        model=model,
-        model_type=normalized_model_type,
-        alpha=float(alpha),
-        blend_weight=float(
-            np.clip(
-                blend_weight,
-                0.0,
-                1.0
-            )
-        ),
-        n_components=int(
-            resolved_components
-        ),
-    )
-
-
-# =========================================================
-# INVERSE TARGET
-# =========================================================
-
-def inverse_target(
-    raw_prediction: np.ndarray,
-    target_transform: str,
-    train_y: np.ndarray
-) -> np.ndarray:
-
-    raw_prediction = np.asarray(
-        raw_prediction,
-        dtype=float
-    )
-
-
-    if target_transform == "log1p":
-
-        safe_upper = math.log1p(
-            max(
-                float(
-                    np.nanmax(train_y)
-                ) * 4.0,
-                1.0
-            )
-        )
-
-        raw_prediction = np.clip(
-            raw_prediction,
-            -0.25,
-            safe_upper
-        )
-
-        return np.expm1(
-            raw_prediction
-        )
-
-
-    return raw_prediction
-
-
-# =========================================================
-# ROBUST PREDICTION BOUNDS
-# =========================================================
-
-def robust_prediction_bounds(
-    train_df: pd.DataFrame,
-    months: Iterable[int]
-) -> Tuple[
-    np.ndarray,
-    np.ndarray
-]:
-
-    overall = train_df[
-        "catch"
-    ].to_numpy(
-        dtype=float
-    )
-
-
-    overall_q95 = (
-        float(
-            np.quantile(
-                overall,
-                0.95
-            )
-        )
-        if len(overall)
-        else 0.0
-    )
-
-
-    lower_values: List[float] = []
-    upper_values: List[float] = []
-
-
-    for month in months:
-
-        month_values = train_df.loc[
-            train_df["month"] == int(month),
-            "catch"
-        ].to_numpy(
-            dtype=float
-        )
-
-
-        if len(month_values) == 0:
-            month_values = overall
-
-
-        month_max = (
-            float(
-                np.max(
-                    month_values
-                )
-            )
-            if len(month_values)
-            else 0.0
-        )
-
-
-        month_mean = (
-            float(
-                np.mean(
-                    month_values
-                )
-            )
-            if len(month_values)
-            else 0.0
-        )
-
-
-        month_std = (
-            float(
-                np.std(
-                    month_values,
-                    ddof=1
-                )
-            )
-            if len(month_values) > 1
-            else month_mean
-        )
-
-
-        lower_values.append(0.0)
-
-
-        upper_values.append(
-            max(
-                month_max * 1.60,
-                month_mean + 3.0 * month_std,
-                overall_q95 * 1.25,
-                1.0,
-            )
-        )
-
-
-    return (
-        np.asarray(
-            lower_values
-        ),
-        np.asarray(
-            upper_values
-        )
-    )
-
-
-# =========================================================
-# MODEL PARAMETERS
-# =========================================================
-
-def model_feature_parameters(
-    bundle: ModelBundle
-) -> Tuple[
-    float,
-    np.ndarray
-]:
-
-    coefficients = np.asarray(
-        bundle.model.coef_,
-        dtype=float
-    ).reshape(-1)
-
-
-    intercept_values = np.asarray(
-        bundle.model.intercept_,
-        dtype=float
-    ).reshape(-1)
-
-
-    intercept = (
-        float(
-            intercept_values[0]
-        )
-        if len(intercept_values)
-        else 0.0
-    )
-
-
-    if bundle.scaler is None:
-
-        return (
-            intercept,
-            coefficients
-        )
-
-
-    scale = np.asarray(
-        bundle.scaler.scale_,
-        dtype=float
-    )
-
-    mean = np.asarray(
-        bundle.scaler.mean_,
-        dtype=float
-    )
-
-
-    safe_scale = np.where(
-        np.abs(scale) < 1e-12,
-        1.0,
-        scale
-    )
-
-
-    original_coefficients = (
-        coefficients
-        / safe_scale
-    )
-
-
-    original_intercept = (
-        intercept
-        - float(
-            np.sum(
-                coefficients
-                * mean
-                / safe_scale
-            )
-        )
-    )
-
-
-    return (
-        original_intercept,
-        original_coefficients
-    )
-
-
-# =========================================================
-# SEASONAL BASELINE
-# =========================================================
-
-def seasonal_baseline(
-    test_df: pd.DataFrame,
-    train_df: pd.DataFrame
-) -> np.ndarray:
-
-    baseline = pd.to_numeric(
-        test_df.get("lag12"),
-        errors="coerce"
-    )
-
-
-    if baseline is None:
-
-        baseline = pd.Series(
-            np.nan,
-            index=test_df.index,
-            dtype=float
-        )
-
 
     for column in [
-        "month_median_prior",
-        "month_avg_prior"
-    ]:
-
-        if column in test_df.columns:
-
-            baseline = baseline.fillna(
-                pd.to_numeric(
-                    test_df[column],
-                    errors="coerce"
-                )
-            )
-
-
-    month_medians = (
-        train_df
-        .groupby("month")["catch"]
-        .median()
-    )
-
-
-    baseline = baseline.fillna(
-        test_df["month"].map(
-            month_medians
-        )
-    )
-
-
-    baseline = baseline.fillna(
-        float(
-            train_df["catch"].median()
-        )
-    )
-
-
-    return np.maximum(
-        baseline.to_numpy(
-            dtype=float
-        ),
-        0.0
-    )
-
-
-# =========================================================
-# PREDICT BUNDLE
-# =========================================================
-
-def predict_bundle(
-    bundle: ModelBundle,
-    test_df: pd.DataFrame,
-    train_df: pd.DataFrame
-) -> np.ndarray:
-
-    x_test = bundle.imputer.transform(
-        test_df[
-            bundle.features
-        ]
-    )
-
-
-    x_model = (
-        bundle.scaler.transform(
-            x_test
-        )
-        if bundle.scaler is not None
-        else x_test
-    )
-
-
-    raw = np.asarray(
-        bundle.model.predict(
-            x_model
-        ),
-        dtype=float
-    ).reshape(-1)
-
-
-    prediction = inverse_target(
-        raw,
-        bundle.target_transform,
-        train_df[
-            "catch"
-        ].to_numpy(
-            dtype=float
-        )
-    )
-
-
-    if bundle.blend_weight < 1.0:
-
-        baseline = seasonal_baseline(
-            test_df,
-            train_df
-        )
-
-
-        prediction = (
-            bundle.blend_weight
-            * prediction
-            +
-            (
-                1.0
-                - bundle.blend_weight
-            )
-            * baseline
-        )
-
-
-    lower, upper = robust_prediction_bounds(
-        train_df,
-        test_df[
-            "month"
-        ].astype(int).tolist()
-    )
-
-
-    return np.clip(
-        prediction,
-        lower,
-        upper
-    )
-
-
-# =========================================================
-# METRICS
-# =========================================================
-
-def calculate_metrics(
-    y_true: Sequence[float],
-    y_pred: Sequence[float],
-    feature_count: int
-) -> Dict[str, Any]:
-
-    actual = np.asarray(
-        y_true,
-        dtype=float
-    )
-
-    predicted = np.asarray(
-        y_pred,
-        dtype=float
-    )
-
-
-    valid = (
-        np.isfinite(actual)
-        &
-        np.isfinite(predicted)
-    )
-
-
-    actual = actual[valid]
-    predicted = predicted[valid]
-
-
-    if len(actual) == 0:
-        return {}
-
-
-    errors = (
-        actual
-        - predicted
-    )
-
-    absolute_errors = np.abs(
-        errors
-    )
-
-    squared_errors = (
-        errors ** 2
-    )
-
-
-    mae = float(
-        mean_absolute_error(
-            actual,
-            predicted
-        )
-    )
-
-
-    mse = float(
-        mean_squared_error(
-            actual,
-            predicted
-        )
-    )
-
-
-    rmse = float(
-        math.sqrt(mse)
-    )
-
-
-    r2 = (
-        float(
-            r2_score(
-                actual,
-                predicted
-            )
-        )
-        if len(actual) > 1
-        else float("nan")
-    )
-
-
-    non_zero = (
-        np.abs(actual)
-        > 1e-12
-    )
-
-
-    mape = (
-        float(
-            np.mean(
-                np.abs(
-                    errors[non_zero]
-                    / actual[non_zero]
-                )
-            )
-            * 100.0
-        )
-        if non_zero.any()
-        else float("nan")
-    )
-
-
-    smape = float(
-        np.mean(
-            2.0
-            * absolute_errors
-            /
-            (
-                np.abs(actual)
-                + np.abs(predicted)
-                + 1e-12
-            )
-        )
-        * 100.0
-    )
-
-
-    wmape = float(
-        np.sum(
-            absolute_errors
-        )
-        /
-        max(
-            np.sum(
-                np.abs(actual)
-            ),
-            1e-12
-        )
-        * 100.0
-    )
-
-
-    mean_actual = float(
-        np.mean(actual)
-    )
-
-
-    nrmse = float(
-        rmse
-        /
-        max(
-            abs(mean_actual),
-            1e-12
-        )
-        * 100.0
-    )
-
-
-    bias = float(
-        np.mean(
-            predicted
-            - actual
-        )
-    )
-
-
-    n = len(actual)
-    p = int(feature_count)
-
-
-    adjusted_r2 = float("nan")
-
-
-    if (
-        n > p + 1
-        and math.isfinite(r2)
-    ):
-
-        adjusted_r2 = (
-            1.0
-            -
-            (
-                1.0 - r2
-            )
-            *
-            (
-                n - 1.0
-            )
-            /
-            (
-                n - p - 1.0
-            )
-        )
-
-
-    return {
-        "rows": int(n),
-
-        "mae": round(
-            mae,
-            4
-        ),
-
-        "mse": round(
-            mse,
-            4
-        ),
-
-        "rmse": round(
-            rmse,
-            4
-        ),
-
-        "mape": finite_or_none(
-            round(
-                mape,
-                4
-            )
-        ),
-
-        "smape": round(
-            smape,
-            4
-        ),
-
-        "wmape": round(
-            wmape,
-            4
-        ),
-
-        "r2": finite_or_none(
-            round(
-                r2,
-                6
-            )
-        ),
-
-        "adjusted_r2": finite_or_none(
-            round(
-                adjusted_r2,
-                6
-            )
-        ),
-
-        "nrmse_percent": round(
-            nrmse,
-            4
-        ),
-
-        "mean_bias_error": round(
-            bias,
-            4
-        ),
-
-        "mean_actual": round(
-            mean_actual,
-            4
-        ),
-
-        "median_absolute_error": round(
-            float(
-                np.median(
-                    absolute_errors
-                )
-            ),
-            4
-        ),
-
-        "p90_absolute_error": round(
-            float(
-                np.quantile(
-                    absolute_errors,
-                    0.90
-                )
-            ),
-            4
-        ),
-
-        "max_absolute_error": round(
-            float(
-                np.max(
-                    absolute_errors
-                )
-            ),
-            4
-        ),
-    }
-
-
-# =========================================================
-# CALIBRATION LABELS
-# =========================================================
-
-ANNUAL_CALIBRATION_LABELS = {
-    "none": "ไม่ปรับยอดรวมรายปี",
-    "last": "อิงยอดรวมของปีก่อน",
-    "mean2": "อิงค่าเฉลี่ยยอดรวม 2 ปีย้อนหลัง",
-    "median": "อิงค่ามัธยฐานยอดรวมของปีที่ผ่านมา",
-    "trend": "อิงแนวโน้มเชิงเส้นของยอดรวมรายปี",
-    "growth": "อิงอัตราเติบโตมัธยฐานรายปี",
-    "dampedtrend": "อิงแนวโน้มรายปีแบบลดความแรง",
-}
-
-
-GUARDRAIL_LABELS = {
-    "none": "ไม่ใช้กรอบเสริม",
-    "iqr1": "กรอบรายเดือน IQR 1 เท่า",
-    "iqr1.5": "กรอบรายเดือน IQR 1.5 เท่า",
-    "adaptive0.5": "ดึงค่าผิดปกติกลับ 50%",
-    "adaptive0.75": "ดึงค่าผิดปกติกลับ 75%",
-    "soft0.25": "ลดความรุนแรงของค่าที่เกินกรอบ",
-}
-
-
-# =========================================================
-# ANNUAL CALIBRATION
-# =========================================================
-
-def forecast_annual_total(
-    train_df: pd.DataFrame,
-    target_year: int,
-    method: str
-) -> Optional[float]:
-
-    totals = (
-        train_df
-        .groupby(
-            "year",
-            observed=False
-        )["catch"]
-        .sum()
-        .sort_index()
-    )
-
-
-    values = totals.to_numpy(
-        dtype=float
-    )
-
-    years = totals.index.to_numpy(
-        dtype=float
-    )
-
-
-    if (
-        len(values) == 0
-        or method == "none"
-    ):
-        return None
-
-
-    if method == "last":
-
-        return max(
-            float(values[-1]),
-            0.0
-        )
-
-
-    if method == "mean2":
-
-        return max(
-            float(
-                np.mean(
-                    values[-2:]
-                )
-            ),
-            0.0
-        )
-
-
-    if method == "median":
-
-        return max(
-            float(
-                np.median(values)
-            ),
-            0.0
-        )
-
-
-    if len(values) < 2:
-
-        return max(
-            float(values[-1]),
-            0.0
-        )
-
-
-    slope, intercept = np.polyfit(
-        years,
-        values,
-        1
-    )
-
-
-    if method == "trend":
-
-        return max(
-            float(
-                slope
-                * float(target_year)
-                + intercept
-            ),
-            0.0
-        )
-
-
-    if method == "dampedtrend":
-
-        return max(
-            float(
-                values[-1]
-                + 0.5 * slope
-            ),
-            0.0
-        )
-
-
-    if method == "growth":
-
-        growth = (
-            values[1:]
-            /
-            np.maximum(
-                values[:-1],
-                1.0
-            )
-        )
-
-
-        robust_growth = float(
-            np.median(
-                np.clip(
-                    growth,
-                    0.50,
-                    1.80
-                )
-            )
-        )
-
-
-        return max(
-            float(
-                values[-1]
-                * robust_growth
-            ),
-            0.0
-        )
-
-
-    return None
-
-
-def apply_annual_calibration(
-    predictions: Sequence[float],
-    train_df: pd.DataFrame,
-    target_year: int,
-    method: str,
-    weight: float,
-) -> np.ndarray:
-
-    prediction = np.maximum(
-        np.asarray(
-            predictions,
-            dtype=float
-        ),
-        0.0
-    )
-
-
-    annual_target = forecast_annual_total(
-        train_df,
-        target_year,
-        method
-    )
-
-
-    if (
-        annual_target is None
-        or method == "none"
-        or weight <= 0.0
-    ):
-
-        return prediction
-
-
-    predicted_total = float(
-        np.sum(prediction)
-    )
-
-
-    if predicted_total <= 1e-12:
-        return prediction
-
-
-    scale = float(
-        np.clip(
-            annual_target
-            / predicted_total,
-            0.35,
-            2.50
-        )
-    )
-
-
-    effective_scale = (
-        (1.0 - float(weight))
-        +
-        float(weight)
-        * scale
-    )
-
-
-    return np.maximum(
-        prediction
-        * effective_scale,
-        0.0
-    )
-
-
-# =========================================================
-# MONTH GUARDRAIL
-# =========================================================
-
-def apply_month_guardrail(
-    predictions: Sequence[float],
-    train_df: pd.DataFrame,
-    test_df: pd.DataFrame,
-    guardrail: str,
-) -> np.ndarray:
-
-    prediction = np.maximum(
-        np.asarray(
-            predictions,
-            dtype=float
-        ),
-        0.0
-    ).copy()
-
-
-    if guardrail == "none":
-        return prediction
-
-
-    baseline = seasonal_baseline(
-        test_df,
-        train_df
-    )
-
-
-    overall = train_df[
-        "catch"
-    ].to_numpy(
-        dtype=float
-    )
-
-
-    for index, month in enumerate(
-        test_df[
-            "month"
-        ].astype(int).tolist()
-    ):
-
-        values = train_df.loc[
-            train_df["month"] == month,
-            "catch"
-        ].to_numpy(
-            dtype=float
-        )
-
-
-        if len(values) < 2:
-            values = overall
-
-
-        if len(values) == 0:
-            continue
-
-
-        q10, q25, q75, q90 = np.quantile(
-            values,
-            [
-                0.10,
-                0.25,
-                0.75,
-                0.90
-            ]
-        )
-
-
-        median = float(
-            np.median(values)
-        )
-
-
-        iqr = float(
-            q75 - q25
-        )
-
-
-        if guardrail == "iqr1":
-
-            prediction[index] = np.clip(
-                prediction[index],
-                max(
-                    0.0,
-                    q25 - iqr
-                ),
-                max(
-                    1.0,
-                    q75 + iqr
-                )
-            )
-
-
-        elif guardrail == "iqr1.5":
-
-            prediction[index] = np.clip(
-                prediction[index],
-                max(
-                    0.0,
-                    q25 - 1.5 * iqr
-                ),
-                max(
-                    1.0,
-                    q75 + 1.5 * iqr
-                )
-            )
-
-
-        elif guardrail in {
-            "adaptive0.5",
-            "adaptive0.75"
-        }:
-
-            scale = max(
-                iqr,
-                float(
-                    q90 - q10
-                ) / 2.0,
-                abs(median) * 0.20,
-                1.0
-            )
-
-
-            if (
-                abs(
-                    prediction[index]
-                    - median
-                )
-                / scale
-                > 2.0
-            ):
-
-                pull = (
-                    0.50
-                    if guardrail
-                    == "adaptive0.5"
-                    else 0.75
-                )
-
-
-                prediction[index] = (
-                    (1.0 - pull)
-                    * prediction[index]
-                    +
-                    pull
-                    * baseline[index]
-                )
-
-
-        elif guardrail == "soft0.25":
-
-            lower = max(
-                0.0,
-                q25 - 1.5 * iqr
-            )
-
-            upper = max(
-                1.0,
-                q75 + 1.5 * iqr
-            )
-
-
-            if prediction[index] > upper:
-
-                prediction[index] = (
-                    upper
-                    +
-                    0.25
-                    * (
-                        prediction[index]
-                        - upper
-                    )
-                )
-
-
-            elif prediction[index] < lower:
-
-                prediction[index] = (
-                    lower
-                    +
-                    0.25
-                    * (
-                        prediction[index]
-                        - lower
-                    )
-                )
-
-
-    return np.maximum(
-        prediction,
-        0.0
-    )
-
-
-# =========================================================
-# SELECTED CALIBRATION
-# =========================================================
-
-def apply_selected_calibration(
-    predictions: Sequence[float],
-    train_df: pd.DataFrame,
-    test_df: pd.DataFrame,
-    target_year: int,
-    chosen: Dict[str, Any],
-) -> np.ndarray:
-
-    calibrated = apply_annual_calibration(
-        predictions,
-        train_df,
-        target_year,
-        str(
-            chosen.get(
-                "annual_calibration",
-                "none"
-            )
-        ),
-        float(
-            chosen.get(
-                "annual_calibration_weight",
-                0.0
-            )
-        ),
-    )
-
-
-    return apply_month_guardrail(
-        calibrated,
-        train_df,
-        test_df,
-        str(
-            chosen.get(
-                "guardrail",
-                "none"
-            )
-        ),
-    )
-
-
-# =========================================================
-# SELECT PREDICTION CALIBRATION
-# =========================================================
-
-def select_prediction_calibration(
-    data: pd.DataFrame,
-    chosen: Dict[str, Any]
-) -> Tuple[
-    Dict[str, Any],
-    List[Dict[str, Any]]
-]:
-
-    fold_predictions: List[
-        Tuple[
-            int,
-            pd.DataFrame,
-            pd.DataFrame,
-            np.ndarray
-        ]
-    ] = []
-
-
-    for validation_year in chosen.get(
-        "validation_years",
-        []
-    ):
-
-        train_df = data[
-            data["year"]
-            < int(validation_year)
-        ].copy()
-
-
-        test_df = data[
-            data["year"]
-            == int(validation_year)
-        ].copy()
-
-
-        if (
-            train_df.empty
-            or test_df.empty
-        ):
-            continue
-
-
-        train_df, test_df = (
-            impute_environment_for_training(
-                train_df,
-                test_df
-            )
-        )
-
-
-        bundle = fit_model(
-            train_df,
-            str(chosen["name"]),
-            list(chosen["features"]),
-            str(chosen["target_transform"]),
-            str(
-                chosen.get(
-                    "model_type",
-                    "ols"
-                )
-            ),
-            float(
-                chosen.get(
-                    "alpha",
-                    0.0
-                )
-            ),
-            float(
-                chosen.get(
-                    "blend_weight",
-                    1.0
-                )
-            ),
-            int(
-                chosen.get(
-                    "n_components",
-                    0
-                )
-            ),
-        )
-
-
-        base_prediction = predict_bundle(
-            bundle,
-            test_df,
-            train_df
-        )
-
-
-        fold_predictions.append(
-            (
-                int(validation_year),
-                train_df,
-                test_df,
-                base_prediction
-            )
-        )
-
-
-    if not fold_predictions:
-
-        selected = dict(chosen)
-
-        selected.update(
-            {
-                "annual_calibration": "none",
-                "annual_calibration_weight": 0.0,
-                "guardrail": "none",
-            }
-        )
-
-        return selected, []
-
-
-    annual_options = [
-        ("none", 0.0)
-    ]
-
-
-    for method in [
-        "last",
-        "mean2",
-        "median",
-        "trend",
-        "growth",
-        "dampedtrend",
-    ]:
-
-        for weight in [
-            0.50,
-            0.75,
-            1.00
-        ]:
-
-            annual_options.append(
-                (
-                    method,
-                    weight
-                )
-            )
-
-
-    guardrail_options = [
-        "none",
-        "iqr1",
-        "iqr1.5",
-        "adaptive0.5",
-        "adaptive0.75",
-        "soft0.25",
-    ]
-
-
-    calibration_results: List[
-        Dict[str, Any]
-    ] = []
-
-
-    effective_features = (
-        int(
-            chosen.get(
-                "n_components",
-                0
-            )
-        )
-        if chosen.get(
-            "model_type"
-        ) == "pls"
-        else len(
-            chosen["features"]
-        )
-    )
-
-
-    for annual_method, annual_weight in annual_options:
-
-        for guardrail in guardrail_options:
-
-            actual_all: List[float] = []
-            prediction_all: List[float] = []
-
-            fold_metrics: List[
-                Dict[str, Any]
-            ] = []
-
-
-            for (
-                validation_year,
-                train_df,
-                test_df,
-                base_prediction
-            ) in fold_predictions:
-
-                calibrated = apply_annual_calibration(
-                    base_prediction,
-                    train_df,
-                    validation_year,
-                    annual_method,
-                    annual_weight
-                )
-
-
-                calibrated = apply_month_guardrail(
-                    calibrated,
-                    train_df,
-                    test_df,
-                    guardrail
-                )
-
-
-                actual = test_df[
-                    "catch"
-                ].to_numpy(
-                    dtype=float
-                )
-
-
-                metric = calculate_metrics(
-                    actual,
-                    calibrated,
-                    effective_features
-                )
-
-
-                metric["year"] = int(
-                    validation_year
-                )
-
-
-                fold_metrics.append(
-                    metric
-                )
-
-
-                actual_all.extend(
-                    actual.tolist()
-                )
-
-                prediction_all.extend(
-                    calibrated.tolist()
-                )
-
-
-            metrics = calculate_metrics(
-                actual_all,
-                prediction_all,
-                effective_features
-            )
-
-
-            calibration_results.append(
-                {
-                    "annual_calibration": annual_method,
-                    "annual_calibration_weight": float(
-                        annual_weight
-                    ),
-                    "guardrail": guardrail,
-                    "metrics": metrics,
-                    "folds": fold_metrics,
-                }
-            )
-
-
-    calibration_results.sort(
-        key=lambda item: (
-            float(
-                item["metrics"].get(
-                    "rmse",
-                    float("inf")
-                )
-            ),
-
-            float(
-                item["metrics"].get(
-                    "mae",
-                    float("inf")
-                )
-            ),
-
-            float(
-                item["metrics"].get(
-                    "p90_absolute_error",
-                    float("inf")
-                )
-            ),
-
-            0
-            if item[
-                "annual_calibration"
-            ] == "none"
-            else 1,
-
-            0
-            if item[
-                "guardrail"
-            ] == "none"
-            else 1,
-        )
-    )
-
-
-    base_metrics = chosen.get(
-        "metrics",
-        {}
-    )
-
-
-    base_p90 = float(
-        base_metrics.get(
-            "p90_absolute_error",
-            float("inf")
-        )
-    )
-
-
-    base_max = float(
-        base_metrics.get(
-            "max_absolute_error",
-            float("inf")
-        )
-    )
-
-
-    acceptable = [
-        item
-        for item in calibration_results
-        if (
-            float(
-                item["metrics"].get(
-                    "p90_absolute_error",
-                    float("inf")
-                )
-            )
-            <= base_p90 * 1.05
-        )
-        and (
-            float(
-                item["metrics"].get(
-                    "max_absolute_error",
-                    float("inf")
-                )
-            )
-            <= base_max * 1.05
-        )
-    ]
-
-
-    best = (
-        acceptable[0]
-        if acceptable
-        else calibration_results[0]
-    )
-
-
-    selected = dict(chosen)
-
-
-    selected.update(
-        {
-            "annual_calibration": best[
-                "annual_calibration"
-            ],
-
-            "annual_calibration_weight": best[
-                "annual_calibration_weight"
-            ],
-
-            "guardrail": best[
-                "guardrail"
-            ],
-
-            "metrics": best[
-                "metrics"
-            ],
-
-            "folds": best[
-                "folds"
-            ],
-        }
-    )
-
-
-    return (
-        selected,
-        calibration_results
-    )
-
-
-# =========================================================
-# CORRELATION
-# =========================================================
-
-def _correlation_pair(
-    x: pd.Series,
-    y: pd.Series
-) -> Tuple[
-    Optional[float],
-    Optional[float],
-    int
-]:
-
-    frame = pd.DataFrame(
-        {
-            "x": pd.to_numeric(
-                x,
-                errors="coerce"
-            ),
-
-            "y": pd.to_numeric(
-                y,
-                errors="coerce"
-            ),
-        }
-    )
-
-
-    frame = (
-        frame
-        .replace(
-            [
-                np.inf,
-                -np.inf
-            ],
-            np.nan
-        )
-        .dropna()
-    )
-
-
-    if (
-        len(frame) < 4
-        or frame["x"].nunique() < 2
-        or frame["y"].nunique() < 2
-    ):
-
-        return (
-            None,
-            None,
-            int(len(frame))
-        )
-
-
-    pearson = float(
-        frame["x"].corr(
-            frame["y"],
-            method="pearson"
-        )
-    )
-
-
-    spearman = float(
-        frame["x"].corr(
-            frame["y"],
-            method="spearman"
-        )
-    )
-
-
-    return (
-        finite_or_none(
-            pearson
-        ),
-
-        finite_or_none(
-            spearman
-        ),
-
-        int(len(frame))
-    )
-
-
-# =========================================================
-# ENVIRONMENT RELATIONSHIP ANALYSIS
-# =========================================================
-
-def analyze_environment_relationship(
-    data: pd.DataFrame
-) -> Dict[str, Any]:
-
-    """
-    Compare same-month and lagged environmental
-    relationships with catch.
-
-    Correlation is descriptive and does not prove causation.
-    """
-
-    relationship_rows: List[
-        Dict[str, Any]
-    ] = []
-
-
-    variable_columns = {
-        "SST": "sst",
-        "Chlorophyll-a": "chlor_log",
-        "Rainfall": "rainfall",
-        "Wind Speed": "wind_speed",
-    }
-
-
-    for variable_name, base_column in variable_columns.items():
-
-        for lag in range(0, 4):
-
-            if lag == 0:
-
-                column = base_column
-
-            else:
-
-                if variable_name == "SST":
-
-                    column = (
-                        f"sst_lag{lag}"
-                    )
-
-                elif variable_name == "Chlorophyll-a":
-
-                    column = (
-                        f"chlor_log_lag{lag}"
-                    )
-
-                elif variable_name == "Rainfall":
-
-                    column = (
-                        f"rainfall_lag{lag}"
-                    )
-
-                else:
-
-                    column = (
-                        f"wind_speed_lag{lag}"
-                    )
-
-
-            if column not in data.columns:
-                continue
-
-
-            pearson, spearman, row_count = (
-                _correlation_pair(
-                    data[column],
-                    data["catch"]
-                )
-            )
-
-
-            direction = "none"
-
-
-            if spearman is not None:
-
-                direction = (
-                    "positive"
-                    if spearman > 0
-                    else
-                    "negative"
-                    if spearman < 0
-                    else
-                    "none"
-                )
-
-
-            relationship_rows.append(
-                {
-                    "variable": variable_name,
-
-                    "lag_months": int(
-                        lag
-                    ),
-
-                    "pearson": (
-                        finite_or_none(
-                            round(
-                                pearson,
-                                6
-                            )
-                        )
-                        if pearson is not None
-                        else None
-                    ),
-
-                    "spearman": (
-                        finite_or_none(
-                            round(
-                                spearman,
-                                6
-                            )
-                        )
-                        if spearman is not None
-                        else None
-                    ),
-
-                    "direction": direction,
-
-                    "rows": row_count,
-                }
-            )
-
-
-    best_relationships: Dict[
-        str,
-        Any
-    ] = {}
-
-
-    for variable_name in variable_columns:
-
-        options = [
-            row
-            for row in relationship_rows
-            if (
-                row["variable"]
-                == variable_name
-                and row["spearman"]
-                is not None
-            )
-        ]
-
-
-        best = (
-            max(
-                options,
-                key=lambda row:
-                abs(
-                    float(
-                        row["spearman"]
-                    )
-                )
-            )
-            if options
-            else None
-        )
-
-
-        best_relationships[
-            variable_name
-        ] = best
-
-
-    valid_columns = [
-        "catch",
         "sst",
         "chlorophyll_a",
+        "sss",
         "rainfall",
         "wind_speed",
-    ]
-
-
-    valid = (
-        data[valid_columns]
-        .replace(
-            [
-                np.inf,
-                -np.inf
-            ],
-            np.nan
-        )
-        .dropna()
-    )
-
-
-    positive = valid[
-        valid["catch"] > 0
-    ]
-
-
-    reference = (
-        positive
-        if not positive.empty
-        else valid
-    )
-
-
-    high_threshold = (
-        float(
-            reference["catch"]
-            .quantile(0.75)
-        )
-        if not reference.empty
-        else 0.0
-    )
-
-
-    high_catch = (
-        reference[
-            reference["catch"]
-            >= high_threshold
-        ]
-        if not reference.empty
-        else reference
-    )
-
-
-    high_catch_summary = {
-        "threshold_ton": round(
-            high_threshold,
-            4
-        ),
-
-        "months": int(
-            len(high_catch)
-        ),
-
-        "mean_sst": (
-            finite_or_none(
-                round(
-                    float(
-                        high_catch["sst"].mean()
-                    ),
-                    4
-                )
-            )
-            if not high_catch.empty
-            else None
-        ),
-
-        "median_sst": (
-            finite_or_none(
-                round(
-                    float(
-                        high_catch["sst"].median()
-                    ),
-                    4
-                )
-            )
-            if not high_catch.empty
-            else None
-        ),
-
-        "mean_chlorophyll_a": (
-            finite_or_none(
-                round(
-                    float(
-                        high_catch[
-                            "chlorophyll_a"
-                        ].mean()
-                    ),
-                    4
-                )
-            )
-            if not high_catch.empty
-            else None
-        ),
-
-        "median_chlorophyll_a": (
-            finite_or_none(
-                round(
-                    float(
-                        high_catch[
-                            "chlorophyll_a"
-                        ].median()
-                    ),
-                    4
-                )
-            )
-            if not high_catch.empty
-            else None
-        ),
-
-        "mean_rainfall": (
-            finite_or_none(
-                round(
-                    float(
-                        high_catch[
-                            "rainfall"
-                        ].mean()
-                    ),
-                    4
-                )
-            )
-            if not high_catch.empty
-            else None
-        ),
-
-        "median_rainfall": (
-            finite_or_none(
-                round(
-                    float(
-                        high_catch[
-                            "rainfall"
-                        ].median()
-                    ),
-                    4
-                )
-            )
-            if not high_catch.empty
-            else None
-        ),
-
-        "mean_wind_speed": (
-            finite_or_none(
-                round(
-                    float(
-                        high_catch[
-                            "wind_speed"
-                        ].mean()
-                    ),
-                    4
-                )
-            )
-            if not high_catch.empty
-            else None
-        ),
-
-        "median_wind_speed": (
-            finite_or_none(
-                round(
-                    float(
-                        high_catch[
-                            "wind_speed"
-                        ].median()
-                    ),
-                    4
-                )
-            )
-            if not high_catch.empty
-            else None
-        ),
-
-        "sst_in_29_5_31_5_percent": (
-            round(
-                float(
-                    high_catch[
-                        "sst"
-                    ]
-                    .between(
-                        29.5,
-                        31.5
-                    )
-                    .mean()
-                    * 100.0
-                ),
-                2
-            )
-            if not high_catch.empty
-            else None
-        ),
-    }
-
-
-    return {
-        "method": (
-            "Pearson and Spearman correlations "
-            "at lags 0-3 months"
-        ),
-
-        "note": (
-            "Correlation is descriptive and "
-            "does not prove that environmental "
-            "variables caused catch changes."
-        ),
-
-        "rows": relationship_rows,
-
-        "best": best_relationships,
-
-        "high_catch_environment":
-            high_catch_summary,
-
-        "research_sst_reference":
-            "29.5-31.5 C Gulf of Thailand "
-            "mackerel fishing-ground range",
-    }
-
-
-# =========================================================
-# CANDIDATE DEFINITIONS
-# =========================================================
-
-def candidate_definitions() -> List[
-    Tuple[
-        str,
-        List[str],
-        str,
-        str,
-        float,
-        float,
-        int
-    ]
-]:
-
-    candidates: List[
-        Tuple[
-            str,
-            List[str],
-            str,
-            str,
-            float,
-            float,
-            int
-        ]
-    ] = []
-
-
-    # -----------------------------------------------------
-    # BASIC
-    # -----------------------------------------------------
-
-    candidates.extend(
-        [
-            (
-                "Basic OLS + Marine + Weather",
-                BASE_FEATURES,
-                "none",
-                "ols",
-                0.0,
-                1.0,
-                0
-            ),
-
-            (
-                "Basic OLS Log-Target + Marine + Weather",
-                BASE_FEATURES,
-                "log1p",
-                "ols",
-                0.0,
-                1.0,
-                0
-            ),
-
-            (
-                "Seasonal-History OLS + Marine + Weather",
-                HISTORY_FEATURES,
-                "none",
-                "ols",
-                0.0,
-                1.0,
-                0
-            ),
-
-            (
-                "Seasonal-History OLS + 50% Baseline",
-                HISTORY_FEATURES,
-                "none",
-                "ols",
-                0.0,
-                0.50,
-                0
-            ),
-
-            (
-                "Seasonal-History OLS Log-Target + 50% Baseline",
-                HISTORY_FEATURES,
-                "log1p",
-                "ols",
-                0.0,
-                0.50,
-                0
-            ),
-
-            (
-                "Environment Relationship OLS + 50% Baseline",
-                ENVIRONMENT_RELATIONSHIP_FEATURES,
-                "none",
-                "ols",
-                0.0,
-                0.50,
-                0
-            ),
-
-            (
-                "Ecology Relationship OLS + 50% Baseline",
-                ECOLOGY_FEATURES,
-                "none",
-                "ols",
-                0.0,
-                0.50,
-                0
-            ),
-        ]
-    )
-
-
-    # -----------------------------------------------------
-    # RIDGE HISTORY
-    # -----------------------------------------------------
-
-    for alpha in [
-        0.1,
-        1.0,
-        10.0,
-        100.0,
-        1000.0
+        "sea_level_pressure",
+        "air_temperature",
+        "wind_direction",
     ]:
-
-        for blend_weight in [
-            1.0,
-            0.75,
-            0.50
-        ]:
-
-            candidates.append(
-                (
-                    (
-                        "Seasonal-History Ridge "
-                        f"alpha={alpha:g}, "
-                        f"weight={blend_weight:.2f}"
-                    ),
-
-                    HISTORY_FEATURES,
-
-                    "none",
-
-                    "ridge",
-
-                    alpha,
-
-                    blend_weight,
-
-                    0,
-                )
-            )
-
-
-    # -----------------------------------------------------
-    # RIDGE LOG TARGET
-    # -----------------------------------------------------
-
-    for alpha in [
-        0.1,
-        1.0,
-        10.0
-    ]:
-
-        for blend_weight in [
-            0.75,
-            0.50
-        ]:
-
-            candidates.append(
-                (
-                    (
-                        "Seasonal-History Ridge "
-                        "Log-Target "
-                        f"alpha={alpha:g}, "
-                        f"weight={blend_weight:.2f}"
-                    ),
-
-                    HISTORY_FEATURES,
-
-                    "log1p",
-
-                    "ridge",
-
-                    alpha,
-
-                    blend_weight,
-
-                    0,
-                )
-            )
-
-
-    # -----------------------------------------------------
-    # ENVIRONMENT LAG RIDGE
-    # -----------------------------------------------------
-
-    for alpha in [
-        10.0,
-        100.0,
-        1000.0
-    ]:
-
-        for blend_weight in [
-            1.0,
-            0.90,
-            0.75
-        ]:
-
-            candidates.append(
-                (
-                    (
-                        "Environment-Lag Ridge "
-                        f"alpha={alpha:g}, "
-                        f"weight={blend_weight:.2f}"
-                    ),
-
-                    ENVIRONMENT_LAG_FEATURES,
-
-                    "none",
-
-                    "ridge",
-
-                    alpha,
-
-                    blend_weight,
-
-                    0,
-                )
-            )
-
-
-    # -----------------------------------------------------
-    # ENVIRONMENT RELATIONSHIP / COMBINED
-    # -----------------------------------------------------
-
-    for alpha in [
-        1.0,
-        10.0,
-        100.0
-    ]:
-
-        for blend_weight in [
-            1.0,
-            0.90,
-            0.50
-        ]:
-
-            candidates.append(
-                (
-                    (
-                        "Environment-Relationship Ridge "
-                        f"alpha={alpha:g}, "
-                        f"weight={blend_weight:.2f}"
-                    ),
-
-                    ENVIRONMENT_RELATIONSHIP_FEATURES,
-
-                    "none",
-
-                    "ridge",
-
-                    alpha,
-
-                    blend_weight,
-
-                    0,
-                )
-            )
-
-
-            candidates.append(
-                (
-                    (
-                        "Environment-Combined Ridge "
-                        f"alpha={alpha:g}, "
-                        f"weight={blend_weight:.2f}"
-                    ),
-
-                    ENVIRONMENT_COMBINED_FEATURES,
-
-                    "none",
-
-                    "ridge",
-
-                    alpha,
-
-                    blend_weight,
-
-                    0,
-                )
-            )
-
-
-    # -----------------------------------------------------
-    # PLS
-    # -----------------------------------------------------
-
-    for component_count in [
-        1,
-        2,
-        3
-    ]:
-
-        for blend_weight in [
-            1.0,
-            0.75,
-            0.50
-        ]:
-
-            candidates.append(
-                (
-                    (
-                        "PLS Environment Relationship "
-                        f"components={component_count}, "
-                        f"weight={blend_weight:.2f}"
-                    ),
-
-                    PLS_RELATIONSHIP_FEATURES,
-
-                    "none",
-
-                    "pls",
-
-                    0.0,
-
-                    blend_weight,
-
-                    component_count,
-                )
-            )
-
-
-    return candidates
-
-
-# =========================================================
-# WALK FORWARD VALIDATION
-# =========================================================
-
-def walk_forward_validation(
-    data: pd.DataFrame
-) -> Tuple[
-    Dict[str, Any],
-    List[Dict[str, Any]]
-]:
-
-    years = sorted(
-        int(year)
-        for year in data[
-            "year"
-        ].unique()
-    )
-
-
-    validation_years = [
-        year
-        for year in years
-        if len(
-            data[
-                data["year"] < year
-            ]
-        ) >= 24
-    ]
-
-
-    if not validation_years:
-
-        validation_years = (
-            [years[-1]]
-            if len(years) > 1
-            else []
-        )
-
-
-    candidate_results: List[
-        Dict[str, Any]
-    ] = []
-
-
-    for (
-        name,
-        features,
-        target_transform,
-        model_type,
-        alpha,
-        blend_weight,
-        n_components
-    ) in candidate_definitions():
-
-        all_actual: List[float] = []
-        all_predicted: List[float] = []
-
-        fold_rows: List[
-            Dict[str, Any]
-        ] = []
-
-
-        for validation_year in validation_years:
-
-            train_df = data[
-                data["year"]
-                < validation_year
-            ].copy()
-
-
-            test_df = data[
-                data["year"]
-                == validation_year
-            ].copy()
-
-
-            minimum_rows = (
-                max(
-                    24,
-                    n_components + 5
-                )
-                if model_type == "pls"
-                else
-                max(
-                    24,
-                    len(features) + 3
-                )
-            )
-
-
-            if (
-                len(train_df)
-                < minimum_rows
-                or test_df.empty
-            ):
-                continue
-
-
-            try:
-
-                train_df, test_df = (
-                    impute_environment_for_training(
-                        train_df,
-                        test_df
-                    )
-                )
-
-
-                bundle = fit_model(
-                    train_df,
-                    name,
-                    features,
-                    target_transform,
-                    model_type,
-                    alpha,
-                    blend_weight,
-                    n_components,
-                )
-
-
-                predictions = predict_bundle(
-                    bundle,
-                    test_df,
-                    train_df
-                )
-
-
-            except Exception:
-
-                continue
-
-
-            actual = test_df[
-                "catch"
-            ].to_numpy(
-                dtype=float
-            )
-
-
-            effective_feature_count = (
-                bundle.n_components
-                if bundle.model_type == "pls"
-                else len(features)
-            )
-
-
-            fold_metric = calculate_metrics(
-                actual,
-                predictions,
-                effective_feature_count
-            )
-
-
-            fold_metric["year"] = int(
-                validation_year
-            )
-
-
-            fold_rows.append(
-                fold_metric
-            )
-
-
-            all_actual.extend(
-                actual.tolist()
-            )
-
-
-            all_predicted.extend(
-                predictions.tolist()
-            )
-
-
-        if not all_actual:
-            continue
-
-
-        effective_feature_count = (
-            n_components
-            if model_type == "pls"
-            else len(features)
-        )
-
-
-        metrics = calculate_metrics(
-            all_actual,
-            all_predicted,
-            effective_feature_count
-        )
-
-
-        candidate_results.append(
-            {
-                "name": name,
-                "features": features,
-                "target_transform": target_transform,
-                "model_type": model_type,
-                "alpha": float(alpha),
-                "blend_weight": float(
-                    blend_weight
-                ),
-                "n_components": int(
-                    n_components
-                ),
-                "metrics": metrics,
-                "folds": fold_rows,
-                "validation_years": [
-                    int(row["year"])
-                    for row in fold_rows
-                ],
-            }
-        )
-
-
-    if not candidate_results:
-
-        raise ValueError(
-            "ไม่สามารถสร้างชุดทดสอบ "
-            "แบบ time-series ได้"
-        )
-
-
-    candidate_results.sort(
-        key=lambda result: (
-            float(
-                result["metrics"].get(
-                    "rmse",
-                    float("inf")
-                )
-            ),
-
-            float(
-                result["metrics"].get(
-                    "mae",
-                    float("inf")
-                )
-            ),
-
-            result.get(
-                "n_components",
-                0
-            )
-            if result.get(
-                "model_type"
-            ) == "pls"
-            else len(
-                result["features"]
-            ),
-        )
-    )
-
-
-    return (
-        candidate_results[0],
-        candidate_results
-    )
-
-
-# =========================================================
-# MODEL DIAGNOSTICS
-# =========================================================
-
-def model_diagnostics(
-    bundle: ModelBundle,
-    train_df: pd.DataFrame
-) -> Dict[str, Any]:
-
-    x = bundle.imputer.transform(
-        train_df[
-            bundle.features
+        feature_rows = feature_rows[
+            feature_rows[column].notna()
+            & np.isfinite(feature_rows[column])
         ]
-    ).astype(float)
 
-
-    y_original = train_df[
-        "catch"
-    ].to_numpy(
-        dtype=float
-    )
-
-
-    y = (
-        np.log1p(
-            np.maximum(
-                y_original,
-                0.0
-            )
-        )
-        if bundle.target_transform
-        == "log1p"
-        else y_original
-    )
-
-
-    x_model = (
-        bundle.scaler.transform(x)
-        if bundle.scaler is not None
-        else x
-    )
-
-
-    fitted = np.asarray(
-        bundle.model.predict(
-            x_model
-        ),
-        dtype=float
-    ).reshape(-1)
-
-
-    residuals = (
-        y - fitted
-    )
-
-
-    n = len(y)
-
-    p = len(
-        bundle.features
-    )
-
-    dof = (
-        n - p - 1
-    )
-
-
-    sse = float(
-        np.sum(
-            residuals ** 2
-        )
-    )
-
-
-    mse_residual = (
-        sse / dof
-        if dof > 0
-        else float("nan")
-    )
-
-
-    residual_std_error = (
-        math.sqrt(
-            mse_residual
-        )
-        if (
-            mse_residual >= 0
-            and math.isfinite(
-                mse_residual
-            )
-        )
-        else float("nan")
-    )
-
-
-    design = np.column_stack(
-        [
-            np.ones(n),
-            x
-        ]
-    )
-
-
-    original_intercept, original_coefficients = (
-        model_feature_parameters(
-            bundle
-        )
-    )
-
-
-    beta = np.concatenate(
-        [
-            [original_intercept],
-            original_coefficients
-        ]
-    )
-
-
-    covariance = np.full(
-        (
-            p + 1,
-            p + 1
-        ),
-        np.nan
-    )
-
-
-    if (
-        dof > 0
-        and math.isfinite(
-            mse_residual
-        )
-    ):
-
-        covariance = (
-            mse_residual
-            *
-            np.linalg.pinv(
-                design.T
-                @ design
-            )
-        )
-
-
-    standard_errors = np.sqrt(
-        np.maximum(
-            np.diag(covariance),
-            0.0
-        )
-    )
-
-
-    with np.errstate(
-        divide="ignore",
-        invalid="ignore"
-    ):
-
-        t_values = (
-            beta
-            / standard_errors
-        )
-
-
-    if (
-        scipy_stats is not None
-        and dof > 0
-    ):
-
-        p_values = (
-            2.0
-            *
-            scipy_stats.t.sf(
-                np.abs(t_values),
-                dof
-            )
-        )
-
-    else:
-
-        p_values = np.full_like(
-            t_values,
-            np.nan
-        )
-
-
-    names = (
-        ["Intercept"]
-        +
-        [
-            FEATURE_LABELS.get(
-                feature,
-                feature
-            )
-            for feature
-            in bundle.features
-        ]
-    )
-
-
-    coefficients = []
-
-
-    for index, name in enumerate(names):
-
-        coefficients.append(
-            {
-                "term": name,
-
-                "coefficient": round(
-                    float(
-                        beta[index]
-                    ),
-                    8
-                ),
-
-                "std_error": finite_or_none(
-                    round(
-                        float(
-                            standard_errors[index]
-                        ),
-                        8
-                    )
-                ),
-
-                "t_stat": finite_or_none(
-                    round(
-                        float(
-                            t_values[index]
-                        ),
-                        6
-                    )
-                ),
-
-                "p_value": finite_or_none(
-                    round(
-                        float(
-                            p_values[index]
-                        ),
-                        8
-                    )
-                ),
-            }
-        )
-
-
-    y_mean = float(
-        np.mean(y)
-    )
-
-
-    ss_total = float(
-        np.sum(
-            (
-                y - y_mean
-            ) ** 2
-        )
-    )
-
-
-    ss_regression = max(
-        ss_total - sse,
-        0.0
-    )
-
-
-    f_statistic = float(
-        "nan"
-    )
-
-    f_p_value = float(
-        "nan"
-    )
-
-
-    if (
-        p > 0
-        and dof > 0
-        and mse_residual > 0
-    ):
-
-        f_statistic = (
-            ss_regression / p
-        ) / mse_residual
-
-
-        if scipy_stats is not None:
-
-            f_p_value = float(
-                scipy_stats.f.sf(
-                    f_statistic,
-                    p,
-                    dof
-                )
-            )
-
-
-    sigma2_mle = max(
-        sse / max(n, 1),
-        1e-12
-    )
-
-
-    aic = (
-        n
-        * math.log(
-            sigma2_mle
-        )
-        + 2 * (p + 1)
-    )
-
-
-    bic = (
-        n
-        * math.log(
-            sigma2_mle
-        )
-        +
-        math.log(
-            max(n, 1)
-        )
-        * (p + 1)
-    )
-
-
-    target_name = (
-        "ln(1 + Catch ton)"
-        if bundle.target_transform
-        == "log1p"
-        else
-        "Catch ton"
-    )
-
-
-    equation_parts = [
-        f"{target_name} = "
-        f"{original_intercept:.6f}"
-    ]
-
-
-    for feature, coefficient in zip(
-        bundle.features,
-        original_coefficients
-    ):
-
-        sign = (
-            "+"
-            if coefficient >= 0
-            else "-"
-        )
-
-
-        equation_parts.append(
-            f" {sign} "
-            f"{abs(float(coefficient)):.6f}"
-            f" × "
-            f"{FEATURE_LABELS.get(feature, feature)}"
-        )
-
-
-    train_prediction = predict_bundle(
-        bundle,
-        train_df,
-        train_df
-    )
-
-
-    training_metrics = calculate_metrics(
-        y_original,
-        train_prediction,
-        p
-    )
-
-
-    return {
-        "equation": (
-            f"Final prediction = "
-            f"{bundle.blend_weight:.2f} × ["
-            + "".join(
-                equation_parts
-            )
-            + f"] + "
-            f"{1.0 - bundle.blend_weight:.2f}"
-            f" × Seasonal baseline"
-            if bundle.blend_weight < 1.0
-            else
-            "".join(
-                equation_parts
-            )
-        ),
-
-        "target_scale": target_name,
-
-        "intercept": round(
-            float(
-                original_intercept
-            ),
-            8
-        ),
-
-        "model_type": bundle.model_type,
-
-        "alpha": round(
-            float(bundle.alpha),
-            6
-        ),
-
-        "n_components": int(
-            bundle.n_components
-        ),
-
-        "blend_weight": round(
-            float(
-                bundle.blend_weight
-            ),
-            4
-        ),
-
-        "coefficient_note": (
-            "PLS coefficients are linear "
-            "latent-component coefficients; "
-            "classical p-values are approximate."
-            if bundle.model_type == "pls"
-            else
-            (
-                "Ridge coefficients are regularized; "
-                "classical p-values are approximate."
-                if bundle.model_type == "ridge"
-                else
-                "OLS coefficients and classical "
-                "diagnostic statistics."
-            )
-        ),
-
-        "coefficients": coefficients,
-
-        "training_metrics": training_metrics,
-
-        "residual_standard_error":
-            finite_or_none(
-                round(
-                    residual_std_error,
-                    6
-                )
-            ),
-
-        "f_statistic":
-            finite_or_none(
-                round(
-                    f_statistic,
-                    6
-                )
-            ),
-
-        "f_p_value":
-            finite_or_none(
-                round(
-                    f_p_value,
-                    8
-                )
-            ),
-
-        "aic": round(
-            float(aic),
-            6
-        ),
-
-        "bic": round(
-            float(bic),
-            6
-        ),
-
-        "degrees_of_freedom": int(
-            max(
-                dof,
-                0
-            )
-        ),
-    }
-
-
-# =========================================================
-# HISTORICAL ENVIRONMENT
-# =========================================================
-
-def historical_environment_for_year(
-    data: pd.DataFrame,
-    year: int
-) -> pd.DataFrame:
-
-    result = data.loc[
-        data["year"] == year,
-        [
-            "year",
-            "month",
-            "sst",
-            "chlorophyll_a",
-            "rainfall",
-            "wind_speed",
-            "catch",
-        ]
+    feature_rows = feature_rows[
+        (feature_rows["sst"] > 0)
+        & (feature_rows["chlorophyll_a"] > 0)
+        & (feature_rows["sss"] > 0)
+        & (feature_rows["rainfall"] >= 0)
+        & (feature_rows["wind_speed"] >= 0)
+        & (feature_rows["sea_level_pressure"] > 0)
+        & (feature_rows["air_temperature"] > 0)
+        & (feature_rows["wind_direction"].between(0, 360))
+        & feature_rows["monsoon"].notna()
     ].copy()
 
+    feature_rows["monsoon"] = (
+        feature_rows["monsoon"].astype(str).str.strip()
+    )
 
-    return (
-        result
-        .sort_values("month")
-        .reset_index(drop=True)
+    radians = np.deg2rad(
+        feature_rows["wind_direction"].astype(float)
+    )
+    feature_rows["wind_dir_sin"] = np.sin(radians)
+    feature_rows["wind_dir_cos"] = np.cos(radians)
+
+    return feature_rows.drop_duplicates(
+        ["station_id", "year", "month"]
+    ).sort_values(["station_id", "year", "month"])
+
+
+def choose_holdout_year(
+    catch: pd.DataFrame,
+    features: pd.DataFrame,
+    station_count: int,
+) -> int:
+    catch_max_year = int(catch["year"].max())
+    expected = station_count * 12
+
+    counts = (
+        features[features["year"] <= catch_max_year]
+        .groupby("year")
+        .size()
+        .to_dict()
+    )
+
+    possible = [
+        int(year)
+        for year, count in counts.items()
+        if int(year) >= START_YEAR + 2 and int(count) == expected
+    ]
+
+    if not possible:
+        raise ValueError(
+            "ไม่พบปีที่มี marine_environment และ weather_data ครบทุกจังหวัด/เดือน "
+            "สำหรับใช้เป็น Holdout"
+        )
+
+    return max(possible)
+
+
+def build_supervised_data(
+    stations: pd.DataFrame,
+    catch: pd.DataFrame,
+    env: pd.DataFrame,
+    weather: pd.DataFrame,
+) -> Tuple[pd.DataFrame, pd.DataFrame, Dict[str, Any]]:
+    features = common_feature_rows(env, weather)
+    label_end_year = int(catch["year"].max())
+
+    data = features[
+        features["year"].between(START_YEAR, label_end_year)
+    ].merge(
+        catch,
+        on=["station_id", "year", "month"],
+        how="left",
+    )
+
+    zero_filled = int(data["catch"].isna().sum())
+    data["catch"] = data["catch"].fillna(0.0).clip(lower=0.0)
+    data["year_index"] = data["year"] - START_YEAR
+
+    data = data.merge(stations, on="station_id", how="left")
+    data = data.sort_values(
+        ["station_id", "year", "month"]
+    ).reset_index(drop=True)
+
+    holdout_year = choose_holdout_year(
+        catch,
+        features,
+        len(stations),
+    )
+
+    summary = {
+        "catch_min_year": int(catch["year"].min()),
+        "catch_max_year": label_end_year,
+        "environment_min_year": int(env["year"].min()),
+        "environment_max_year": int(env["year"].max()),
+        "sss_min": float(env["sss"].min()),
+        "sss_max": float(env["sss"].max()),
+        "sss_mean": float(env["sss"].mean()),
+        "weather_min_year": int(weather["year"].min()),
+        "weather_max_year": int(weather["year"].max()),
+        "holdout_year": int(holdout_year),
+        "training_feature_rows": int(len(data)),
+        "zero_filled_catch_months": zero_filled,
+        "future_feature_rows": int((features["year"] > label_end_year).sum()),
+    }
+
+    return data, features, summary
+
+
+# 5) สร้างและประเมินโมเดล
+def calculate_metrics(y_true, y_pred) -> Dict[str, float]:
+    y = np.asarray(y_true, dtype=float)
+    p = np.asarray(y_pred, dtype=float)
+    return {
+        "mae": float(mean_absolute_error(y, p)),
+        "rmse": float(mean_squared_error(y, p) ** 0.5),
+        "r2": float(r2_score(y, p)),
+    }
+
+
+def calculate_nrmse_percent(y_true, rmse: float) -> float:
+    """
+    NRMSE (%) = RMSE / Mean(Actual) × 100
+
+    ใช้สำหรับเปรียบเทียบความคลาดเคลื่อนข้ามจังหวัดที่มี Scale
+    ของปริมาณปลาทูแตกต่างกันมาก
+    """
+    y = np.asarray(y_true, dtype=float)
+    mean_actual = float(np.mean(y)) if len(y) else 0.0
+
+    if not np.isfinite(mean_actual) or mean_actual <= 0:
+        return float("nan")
+
+    return float((float(rmse) / mean_actual) * 100.0)
+
+
+def make_model(use_sss: bool, station_id: int) -> Pipeline:
+    """
+    สร้าง Linear Regression รายจังหวัด
+    - SLP เลือกใช้ได้รายจังหวัด
+    - Monsoon เข้ารหัสแบบ One-Hot และเลือกใช้ได้รายจังหวัด
+    """
+    feature_columns = list(
+        SSS_FEATURES if use_sss else BASE_FEATURES
+    )
+
+    use_slp = bool(
+        USE_SEA_LEVEL_PRESSURE_BY_STATION.get(
+            int(station_id),
+            False,
+        )
+    )
+    use_monsoon = bool(
+        USE_MONSOON_BY_STATION.get(
+            int(station_id),
+            False,
+        )
+    )
+
+    if use_slp:
+        feature_columns.append("sea_level_pressure")
+
+    transformers = [
+        ("numeric", "passthrough", feature_columns),
+        (
+            "month",
+            OneHotEncoder(
+                drop="first",
+                handle_unknown="ignore",
+            ),
+            ["month"],
+        ),
+    ]
+
+    if use_monsoon:
+        transformers.append(
+            (
+                "monsoon",
+                OneHotEncoder(
+                    drop="first",
+                    handle_unknown="ignore",
+                ),
+                ["monsoon"],
+            )
+        )
+
+    preprocessor = ColumnTransformer(
+        transformers
+    )
+
+    return Pipeline(
+        [
+            ("preprocessor", preprocessor),
+            ("linear_regression", LinearRegression()),
+        ]
     )
 
 
-# =========================================================
-# FORECAST ENVIRONMENT
-# =========================================================
+def fit_raw(
+    train: pd.DataFrame,
+    test: pd.DataFrame,
+    decay: float,
+    use_sss: bool,
+) -> Tuple[np.ndarray, Pipeline]:
+    station_id = int(train["station_id"].iloc[0])
+    model = make_model(
+        use_sss,
+        station_id,
+    )
 
-def forecast_environment_year(
-    environment_history: pd.DataFrame,
-    target_year: int
-) -> pd.DataFrame:
+    sample_weight = np.power(
+        float(decay),
+        train["year"].max() - train["year"].to_numpy(dtype=float),
+    )
 
-    rows: List[
-        Dict[str, float]
-    ] = []
+    model.fit(
+        train,
+        train["catch"],
+        linear_regression__sample_weight=sample_weight,
+    )
 
-
-    environment_columns = [
-        "sst",
-        "chlorophyll_a",
-        "rainfall",
-        "wind_speed",
-    ]
+    prediction = np.maximum(model.predict(test), 0.0)
+    return prediction, model
 
 
-    for month in range(1, 13):
+def seasonal_reference(
+    train: pd.DataFrame,
+    test: pd.DataFrame,
+) -> Tuple[np.ndarray, np.ndarray]:
+    seasonal_mean: List[float] = []
+    seasonal_max: List[float] = []
 
-        month_history = (
-            environment_history[
-                environment_history[
-                    "month"
-                ] == month
-            ]
-            .sort_values("year")
+    for row in test.itertuples(index=False):
+        values = train.loc[train["month"] == int(row.month), "catch"]
+        if values.empty:
+            values = train["catch"]
+        seasonal_mean.append(float(values.mean()))
+        seasonal_max.append(float(values.max()))
+
+    return np.asarray(seasonal_mean), np.asarray(seasonal_max)
+
+
+def apply_calibration(
+    raw_prediction: np.ndarray,
+    seasonal_mean: np.ndarray,
+    seasonal_max: np.ndarray,
+    model_weight: float,
+    cap_multiplier,
+) -> np.ndarray:
+    prediction = (
+        float(model_weight) * raw_prediction
+        + (1.0 - float(model_weight)) * seasonal_mean
+    )
+
+    if cap_multiplier is not None:
+        prediction = np.minimum(
+            prediction,
+            seasonal_max * float(cap_multiplier),
         )
 
+    return np.maximum(prediction, 0.0)
 
-        if month_history.empty:
 
-            raise ValueError(
-                "ไม่มีข้อมูลสิ่งแวดล้อม "
-                f"สำหรับเดือน {month}"
+def apply_bias_correction(
+    prediction: np.ndarray,
+    bias: float,
+) -> np.ndarray:
+    """ชดเชยค่าคาดการณ์ด้วย Bias ที่เรียนรู้จาก Walk-forward residual."""
+    return np.maximum(
+        np.asarray(prediction, dtype=float) + float(bias),
+        0.0,
+    )
+
+
+def estimate_robust_bias(
+    actual: Sequence[float],
+    predicted: Sequence[float],
+) -> Tuple[float, float]:
+    """หา Bias แบบ robust โดยใช้ median residual เพื่อลดผลของ outlier."""
+    y = np.asarray(actual, dtype=float)
+    p = np.asarray(predicted, dtype=float)
+
+    residual = y - p
+    raw_bias = float(np.median(residual))
+
+    # จำกัดขนาด Bias จากข้อมูล validation เท่านั้น จึงไม่ใช้ข้อมูล Holdout
+    catch_median = float(np.median(np.abs(y))) if len(y) else 0.0
+    bias_limit = max(1.0, catch_median * float(BIAS_MAX_MEDIAN_RATIO))
+
+    bias = float(np.clip(
+        raw_bias * float(BIAS_STRENGTH),
+        -bias_limit,
+        bias_limit,
+    ))
+
+    return bias, raw_bias
+
+
+# 6) ปรับ Weight / Bias แบบ Walk-forward
+def tuning_years_for_holdout(holdout_year: int) -> List[int]:
+    years = list(
+        range(
+            max(START_YEAR + 2, int(holdout_year) - 3),
+            int(holdout_year),
+        )
+    )
+    if not years:
+        raise ValueError("มีจำนวนปีไม่เพียงพอสำหรับ Walk-forward validation")
+    return years
+
+
+def tune_station_standard(
+    station_data: pd.DataFrame,
+    tuning_years: List[int],
+) -> Dict[str, Any]:
+    station_id = int(station_data["station_id"].iloc[0])
+    use_sss = bool(USE_SSS_BY_STATION.get(station_id, True))
+
+    decay_results = []
+    cached: Dict[float, Dict[int, Tuple[pd.DataFrame, np.ndarray, np.ndarray, np.ndarray]]] = {}
+
+    for decay in DECAY_GRID:
+        actual: List[float] = []
+        predicted: List[float] = []
+        cached[float(decay)] = {}
+
+        for validation_year in tuning_years:
+            train = station_data[station_data["year"] < validation_year]
+            test = station_data[station_data["year"] == validation_year]
+
+            if train.empty or test.empty:
+                continue
+
+            raw, _ = fit_raw(train, test, float(decay), use_sss)
+            seasonal_mean, seasonal_max = seasonal_reference(train, test)
+
+            cached[float(decay)][validation_year] = (
+                test,
+                raw,
+                seasonal_mean,
+                seasonal_max,
             )
 
+            actual.extend(test["catch"].tolist())
+            predicted.extend(raw.tolist())
 
-        row: Dict[str, float] = {
-            "year": int(target_year),
-            "month": int(month),
-        }
+        if not actual:
+            continue
 
+        result = calculate_metrics(actual, predicted)
+        decay_results.append({"decay": float(decay), **result})
 
-        for column in environment_columns:
+    if not decay_results:
+        raise ValueError("ไม่สามารถทำ Walk-forward validation ได้")
 
-            values = month_history[
-                column
-            ].to_numpy(
-                dtype=float
+    decay_results.sort(key=lambda x: (x["rmse"], x["mae"]))
+    best_decay = float(decay_results[0]["decay"])
+
+    candidates = []
+
+    for model_weight in MODEL_WEIGHT_GRID:
+        for cap_multiplier in CAP_GRID:
+            actual: List[float] = []
+            predicted: List[float] = []
+
+            for validation_year in tuning_years:
+                if validation_year not in cached[best_decay]:
+                    continue
+
+                test, raw, seasonal_mean, seasonal_max = cached[best_decay][validation_year]
+                pred = apply_calibration(
+                    raw,
+                    seasonal_mean,
+                    seasonal_max,
+                    float(model_weight),
+                    cap_multiplier,
+                )
+
+                actual.extend(test["catch"].tolist())
+                predicted.extend(pred.tolist())
+
+            if not actual:
+                continue
+
+            result = calculate_metrics(actual, predicted)
+            candidates.append(
+                {
+                    "decay": best_decay,
+                    "model_weight": float(model_weight),
+                    "seasonal_weight": 1.0 - float(model_weight),
+                    "cap_multiplier": cap_multiplier,
+                    **result,
+                }
             )
 
+    if not candidates:
+        raise ValueError("ไม่สามารถเลือก calibration ได้")
 
-            values = values[
-                np.isfinite(values)
-            ]
+    # เลือก Weight/Cap จาก Walk-forward validation โดยไม่แตะ Holdout year
+    candidates.sort(key=lambda x: (x["rmse"], x["mae"]))
+    best = dict(candidates[0])
+
+    # หลังเลือก Weight แล้ว คำนวณ Bias จาก residual ของ validation ทั้งหมด
+    # ใช้ median แทน mean เพราะข้อมูลปริมาณจับมี outlier ค่อนข้างมาก
+    bias_actual: List[float] = []
+    bias_predicted: List[float] = []
+
+    for validation_year in tuning_years:
+        if validation_year not in cached[best_decay]:
+            continue
+
+        test, raw, seasonal_mean, seasonal_max = cached[best_decay][validation_year]
+        pred = apply_calibration(
+            raw,
+            seasonal_mean,
+            seasonal_max,
+            best["model_weight"],
+            best["cap_multiplier"],
+        )
+
+        bias_actual.extend(test["catch"].tolist())
+        bias_predicted.extend(pred.tolist())
+
+    bias, raw_bias = estimate_robust_bias(
+        bias_actual,
+        bias_predicted,
+    )
+
+    best["bias"] = float(bias)
+    best["raw_bias"] = float(raw_bias)
+    best["bias_strength"] = float(BIAS_STRENGTH)
+    best["bias_method"] = "median_walk_forward_residual"
+    best["use_sss"] = bool(use_sss)
+    best["feature_mode"] = "with_sss" if use_sss else "without_sss"
+
+    return best
 
 
-            years = month_history[
-                "year"
-            ].to_numpy(
-                dtype=float
+
+def calculate_weighted_metrics(
+    y_true: Sequence[float],
+    y_pred: Sequence[float],
+    sample_weight: Sequence[float],
+) -> Dict[str, float]:
+    y = np.asarray(y_true, dtype=float)
+    p = np.asarray(y_pred, dtype=float)
+    w = np.asarray(sample_weight, dtype=float)
+
+    if len(y) == 0 or len(y) != len(p) or len(y) != len(w):
+        raise ValueError("ข้อมูลสำหรับ Weighted metrics ไม่ถูกต้อง")
+
+    error = y - p
+    mae = float(np.average(np.abs(error), weights=w))
+    rmse = float(np.sqrt(np.average(error ** 2, weights=w)))
+
+    weighted_mean = float(np.average(y, weights=w))
+    ss_res = float(np.sum(w * (y - p) ** 2))
+    ss_tot = float(np.sum(w * (y - weighted_mean) ** 2))
+    r2 = float(1.0 - (ss_res / ss_tot)) if ss_tot > 0 else float("nan")
+
+    return {
+        "mae": mae,
+        "rmse": rmse,
+        "r2": r2,
+    }
+
+
+def tune_station_recency(
+    station_data: pd.DataFrame,
+    tuning_years: List[int],
+    recency_factor: float,
+) -> Dict[str, Any]:
+    """
+    Tune Decay + Weight + Alpha + Bias พร้อมกัน
+    โดยให้น้ำหนัก Validation ปีล่าสุดมากขึ้น
+    """
+    station_id = int(station_data["station_id"].iloc[0])
+    use_sss = bool(USE_SSS_BY_STATION.get(station_id, True))
+
+    bias_strength_grid = BIAS_STRENGTH_GRID_BY_STATION.get(
+        station_id,
+        [0.0, 0.5, 1.0],
+    )
+
+    cached = {}
+
+    for decay in DECAY_GRID:
+        decay_value = float(decay)
+        cached[decay_value] = {}
+
+        for validation_year in tuning_years:
+            train = station_data[station_data["year"] < validation_year]
+            test = station_data[station_data["year"] == validation_year]
+
+            if train.empty or test.empty:
+                continue
+
+            raw, _ = fit_raw(
+                train,
+                test,
+                decay_value,
+                use_sss,
             )
 
+            seasonal_mean, seasonal_max = seasonal_reference(
+                train,
+                test,
+            )
 
-            years = years[
-                np.isfinite(
-                    month_history[
-                        column
-                    ].to_numpy(
-                        dtype=float
+            cached[decay_value][validation_year] = (
+                test,
+                raw,
+                seasonal_mean,
+                seasonal_max,
+            )
+
+    best = None
+
+    for decay in DECAY_GRID:
+        decay_value = float(decay)
+
+        for model_weight in MODEL_WEIGHT_GRID:
+            weight_value = float(model_weight)
+
+            for cap_multiplier in CAP_GRID:
+                actual = []
+                predicted = []
+                validation_weights = []
+
+                for year_index, validation_year in enumerate(tuning_years):
+                    if validation_year not in cached[decay_value]:
+                        continue
+
+                    test, raw, seasonal_mean, seasonal_max = (
+                        cached[decay_value][validation_year]
                     )
-                )
-            ]
 
-
-            if len(values) == 0:
-
-                raise ValueError(
-                    f"ไม่มีค่าที่ใช้พยากรณ์ "
-                    f"{column} เดือน {month}"
-                )
-
-
-            recent_mean = float(
-                np.mean(
-                    values[
-                        -min(
-                            3,
-                            len(values)
-                        ):
-                    ]
-                )
-            )
-
-
-            last_value = float(
-                values[-1]
-            )
-
-
-            if len(values) >= 2:
-
-                trend_model = (
-                    LinearRegression()
-                    .fit(
-                        years.reshape(
-                            -1,
-                            1
-                        ),
-                        values
+                    pred = apply_calibration(
+                        raw,
+                        seasonal_mean,
+                        seasonal_max,
+                        weight_value,
+                        cap_multiplier,
                     )
-                )
 
+                    actual.extend(test["catch"].tolist())
+                    predicted.extend(pred.tolist())
 
-                trend_value = float(
-                    trend_model.predict(
-                        np.asarray(
-                            [
-                                [
-                                    target_year
-                                ]
-                            ],
-                            dtype=float
-                        )
-                    )[0]
-                )
-
-
-                deltas = np.diff(
-                    values
-                )
-
-
-                cyclic_delta = (
-                    float(
-                        deltas[
-                            (
-                                target_year
-                                - int(years[-1])
-                                - 1
-                            )
-                            % len(deltas)
-                        ]
+                    year_weight = (
+                        float(recency_factor)
+                        ** int(year_index)
                     )
-                    if len(deltas)
+
+                    validation_weights.extend(
+                        [year_weight] * len(test)
+                    )
+
+                if not actual:
+                    continue
+
+                y = np.asarray(actual, dtype=float)
+                p = np.asarray(predicted, dtype=float)
+
+                residual = y - p
+                raw_bias = float(np.median(residual))
+
+                catch_median = (
+                    float(np.median(np.abs(y)))
+                    if len(y)
                     else 0.0
                 )
 
-            else:
-
-                trend_value = last_value
-                cyclic_delta = 0.0
-
-
-            # -------------------------------------------------
-            # IMPORTANT
-            # Weights sum to exactly 1.00
-            # -------------------------------------------------
-
-            forecast = (
-                0.40 * trend_value
-                +
-                0.30 * recent_mean
-                +
-                0.20 * last_value
-                +
-                0.10 * cyclic_delta
-            )
-
-
-            q05 = float(
-                np.quantile(
-                    values,
-                    0.05
-                )
-            )
-
-
-            q95 = float(
-                np.quantile(
-                    values,
-                    0.95
-                )
-            )
-
-
-            spread = max(
-                q95 - q05,
-                float(
-                    np.std(values)
-                ),
-                0.01
-            )
-
-
-            lower = (
-                q05
-                - 0.35 * spread
-            )
-
-
-            upper = (
-                q95
-                + 0.35 * spread
-            )
-
-
-            if column == "chlorophyll_a":
-
-                lower = max(
-                    lower,
-                    0.0
+                bias_limit = max(
+                    1.0,
+                    catch_median * float(BIAS_MAX_MEDIAN_RATIO),
                 )
 
-
-            if column in [
-                "rainfall",
-                "wind_speed"
-            ]:
-
-                lower = max(
-                    lower,
-                    0.0
-                )
-
-
-            row[column] = float(
-                np.clip(
-                    forecast,
-                    lower,
-                    upper
-                )
-            )
-
-
-        rows.append(row)
-
-
-    return pd.DataFrame(
-        rows
-    )
-
-
-# =========================================================
-# BUILD FUTURE FEATURES
-# =========================================================
-
-def build_future_feature_rows(
-    history: pd.DataFrame,
-    env_year: pd.DataFrame,
-    min_year: int,
-    environment_history: Optional[
-        pd.DataFrame
-    ] = None,
-) -> pd.DataFrame:
-
-    target_year = int(
-        env_year[
-            "year"
-        ].iloc[0]
-    )
-
-
-    environment_columns = [
-        "year",
-        "month",
-        "sst",
-        "chlorophyll_a",
-        "rainfall",
-        "wind_speed",
-    ]
-
-
-    if environment_history is not None:
-
-        environment_base = (
-            environment_history[
-                environment_columns
-            ].copy()
-        )
-
-    else:
-
-        environment_base = (
-            history[
-                environment_columns
-            ].copy()
-        )
-
-
-    environment_combined = pd.concat(
-        [
-            environment_base,
-            env_year[
-                environment_columns
-            ],
-        ],
-        ignore_index=True
-    )
-
-
-    environment_combined = (
-        environment_combined
-        .sort_values(
-            [
-                "year",
-                "month"
-            ]
-        )
-        .drop_duplicates(
-            [
-                "year",
-                "month"
-            ],
-            keep="last"
-        )
-    )
-
-
-    target_environment = (
-        refresh_environment_features(
-            environment_combined
-        )
-    )
-
-
-    target_environment = (
-        target_environment[
-            target_environment[
-                "year"
-            ] == target_year
-        ].copy()
-    )
-
-
-    rows: List[
-        Dict[str, float]
-    ] = []
-
-
-    for env_row in (
-        target_environment
-        .sort_values("month")
-        .itertuples(index=False)
-    ):
-
-        month = int(
-            env_row.month
-        )
-
-
-        previous_year_value = (
-            history.loc[
-                (
-                    history["year"]
-                    == target_year - 1
-                )
-                &
-                (
-                    history["month"]
-                    == month
-                ),
-                "catch"
-            ]
-        )
-
-
-        lag12 = (
-            float(
-                previous_year_value.iloc[-1]
-            )
-            if not previous_year_value.empty
-            else float("nan")
-        )
-
-
-        prior_month_values = (
-            history.loc[
-                (
-                    history["year"]
-                    < target_year
-                )
-                &
-                (
-                    history["month"]
-                    == month
-                ),
-                "catch"
-            ]
-        )
-
-
-        month_avg_prior = (
-            float(
-                prior_month_values.mean()
-            )
-            if not prior_month_values.empty
-            else float("nan")
-        )
-
-
-        month_median_prior = (
-            float(
-                prior_month_values.median()
-            )
-            if not prior_month_values.empty
-            else float("nan")
-        )
-
-
-        row = {
-            "year": target_year,
-
-            "month": month,
-
-            "sst": float(
-                env_row.sst
-            ),
-
-            "chlorophyll_a": float(
-                env_row.chlorophyll_a
-            ),
-
-            "rainfall": float(
-                env_row.rainfall
-            ),
-
-            "wind_speed": float(
-                env_row.wind_speed
-            ),
-
-            "chlor_log": float(
-                env_row.chlor_log
-            ),
-
-            "month_sin": math.sin(
-                2.0
-                * math.pi
-                * month
-                / 12.0
-            ),
-
-            "month_cos": math.cos(
-                2.0
-                * math.pi
-                * month
-                / 12.0
-            ),
-
-            "year_index":
-                target_year
-                - min_year,
-
-            "lag12": lag12,
-
-            "month_avg_prior":
-                month_avg_prior,
-
-            "month_median_prior":
-                month_median_prior,
-
-            **{
-                f"month_{month_number}":
-                float(
-                    month
-                    == month_number
-                )
-                for month_number
-                in range(2, 13)
-            },
-        }
-
-
-        environment_feature_columns = [
-            "sst_lag1",
-            "sst_lag2",
-            "sst_lag3",
-
-            "chlor_log_lag1",
-            "chlor_log_lag2",
-            "chlor_log_lag3",
-
-            "rainfall_lag1",
-            "rainfall_lag2",
-            "rainfall_lag3",
-
-            "wind_speed_lag1",
-            "wind_speed_lag2",
-            "wind_speed_lag3",
-
-            "sst_sq",
-            "chlor_log_sq",
-            "sst_chlor",
-
-            "sst_delta1",
-            "chlor_delta1",
-
-            "rainfall_delta1",
-            "wind_speed_delta1",
-
-            "sst_anomaly",
-            "chlor_anomaly",
-
-            "rainfall_anomaly",
-            "wind_speed_anomaly",
-
-            "sst_distance_30_5",
-            "sst_distance_sq",
-            "sst_in_gulf_range",
-        ]
-
-
-        for column in environment_feature_columns:
-
-            value = getattr(
-                env_row,
-                column
-            )
-
-
-            row[column] = (
-                float(value)
-                if pd.notna(value)
-                else float("nan")
-            )
-
-
-        rows.append(row)
-
-
-    return pd.DataFrame(
-        rows
-    )
-
-
-# =========================================================
-# PREDICT SELECTED YEAR
-# =========================================================
-
-def predict_selected_year(
-    selected_year: int,
-    data: pd.DataFrame,
-    chosen: Dict[str, Any]
-) -> Tuple[
-    pd.DataFrame,
-    ModelBundle,
-    str,
-    pd.DataFrame
-]:
-
-    min_year = int(
-        data["year"].min()
-    )
-
-    max_year = int(
-        data["year"].max()
-    )
-
-
-    features = list(
-        chosen["features"]
-    )
-
-
-    target_transform = str(
-        chosen["target_transform"]
-    )
-
-
-    name = str(
-        chosen["name"]
-    )
-
-
-    # =====================================================
-    # HISTORICAL YEAR
-    # =====================================================
-
-    if selected_year <= max_year:
-
-        prior = data[
-            data["year"]
-            < selected_year
-        ].copy()
-
-
-        required_rows = (
-            max(
-                24,
-                int(
-                    chosen.get(
-                        "n_components",
-                        0
+                for bias_strength in bias_strength_grid:
+                    bias = float(
+                        np.clip(
+                            raw_bias * float(bias_strength),
+                            -bias_limit,
+                            bias_limit,
+                        )
                     )
-                ) + 5
-            )
-            if str(
-                chosen.get(
-                    "model_type",
-                    "ols"
-                )
-            ) == "pls"
-            else
-            max(
-                24,
-                len(features) + 3
-            )
-        )
 
-
-        if len(prior) >= required_rows:
-
-            train_df = prior
-
-            mode = (
-                "Historical "
-                "out-of-sample prediction"
-            )
-
-        else:
-
-            train_df = data[
-                data["year"]
-                != selected_year
-            ].copy()
-
-            mode = (
-                "Historical "
-                "leave-one-year-out prediction"
-            )
-
-
-        test_df = data[
-            data["year"]
-            == selected_year
-        ].copy()
-
-
-        if test_df.empty:
-
-            raise ValueError(
-                f"ไม่มีข้อมูลสิ่งแวดล้อมปี "
-                f"{selected_year} "
-                f"ในฐานข้อมูล"
-            )
-
-
-        train_df, test_df = (
-            impute_environment_for_training(
-                train_df,
-                test_df
-            )
-        )
-
-
-        bundle = fit_model(
-            train_df,
-            name,
-            features,
-            target_transform,
-            str(
-                chosen.get(
-                    "model_type",
-                    "ols"
-                )
-            ),
-            float(
-                chosen.get(
-                    "alpha",
-                    0.0
-                )
-            ),
-            float(
-                chosen.get(
-                    "blend_weight",
-                    1.0
-                )
-            ),
-            int(
-                chosen.get(
-                    "n_components",
-                    0
-                )
-            ),
-        )
-
-
-        predictions = predict_bundle(
-            bundle,
-            test_df,
-            train_df
-        )
-
-
-        predictions = (
-            apply_selected_calibration(
-                predictions,
-                train_df,
-                test_df,
-                selected_year,
-                chosen
-            )
-        )
-
-
-        result = test_df[
-            [
-                "year",
-                "month",
-                "sst",
-                "chlorophyll_a",
-                "rainfall",
-                "wind_speed",
-                "catch",
-            ]
-        ].copy()
-
-
-        result[
-            "predicted_mackerel_ton"
-        ] = predictions
-
-
-        result.rename(
-            columns={
-                "catch":
-                    "actual_mackerel_ton"
-            },
-            inplace=True
-        )
-
-
-        result[
-            "absolute_error_ton"
-        ] = np.abs(
-            result[
-                "actual_mackerel_ton"
-            ]
-            -
-            result[
-                "predicted_mackerel_ton"
-            ]
-        )
-
-
-        return (
-            result,
-            bundle,
-            mode,
-            train_df
-        )
-
-
-    # =====================================================
-    # FUTURE YEAR
-    # =====================================================
-
-    train_df = data.copy()
-
-
-    bundle = fit_model(
-        train_df,
-        name,
-        features,
-        target_transform,
-        str(
-            chosen.get(
-                "model_type",
-                "ols"
-            )
-        ),
-        float(
-            chosen.get(
-                "alpha",
-                0.0
-            )
-        ),
-        float(
-            chosen.get(
-                "blend_weight",
-                1.0
-            )
-        ),
-        int(
-            chosen.get(
-                "n_components",
-                0
-            )
-        ),
-    )
-
-
-    history = data[
-        [
-            "year",
-            "month",
-            "sst",
-            "chlorophyll_a",
-            "rainfall",
-            "wind_speed",
-            "catch",
-        ]
-    ].copy()
-
-
-    environment_history = history[
-        [
-            "year",
-            "month",
-            "sst",
-            "chlorophyll_a",
-            "rainfall",
-            "wind_speed",
-        ]
-    ].copy()
-
-
-    selected_result: Optional[
-        pd.DataFrame
-    ] = None
-
-
-    for year in range(
-        max_year + 1,
-        selected_year + 1
-    ):
-
-        env_year = forecast_environment_year(
-            environment_history,
-            year
-        )
-
-
-        future_features = (
-            build_future_feature_rows(
-                history,
-                env_year,
-                min_year,
-                environment_history
-            )
-        )
-
-
-        predictions = predict_bundle(
-            bundle,
-            future_features,
-            train_df
-        )
-
-
-        predictions = (
-            apply_selected_calibration(
-                predictions,
-                history,
-                future_features,
-                year,
-                chosen
-            )
-        )
-
-
-        # -------------------------------------------------
-        # YEAR-TO-YEAR GUARD
-        # -------------------------------------------------
-
-        previous_year = (
-            history[
-                history["year"]
-                == year - 1
-            ]
-            .set_index("month")
-        )
-
-
-        adjusted: List[
-            float
-        ] = []
-
-
-        for row, prediction in zip(
-            future_features.itertuples(
-                index=False
-            ),
-            predictions
-        ):
-
-            if (
-                int(row.month)
-                in previous_year.index
-            ):
-
-                previous = float(
-                    previous_year.loc[
-                        int(row.month),
-                        "catch"
-                    ]
-                )
-
-            else:
-
-                previous = float(
-                    prediction
-                )
-
-
-            if previous > 0:
-
-                prediction = float(
-                    np.clip(
-                        prediction,
-                        previous * 0.45,
-                        previous * 1.75
+                    calibrated = np.maximum(
+                        p + bias,
+                        0.0,
                     )
-                )
+
+                    result = calculate_weighted_metrics(
+                        y,
+                        calibrated,
+                        validation_weights,
+                    )
+
+                    candidate = {
+                        "decay": decay_value,
+                        "model_weight": weight_value,
+                        "seasonal_weight": 1.0 - weight_value,
+                        "cap_multiplier": cap_multiplier,
+                        "bias": bias,
+                        "raw_bias": raw_bias,
+                        "bias_strength": float(bias_strength),
+                        "bias_method": "median_walk_forward_residual_recency_weighted",
+                        "validation_recency_factor": float(recency_factor),
+                        "use_sss": bool(use_sss),
+                        "feature_mode": (
+                            "with_sss"
+                            if use_sss
+                            else "without_sss"
+                        ),
+                        **result,
+                    }
+
+                    if best is None or (
+                        candidate["rmse"],
+                        candidate["mae"],
+                    ) < (
+                        best["rmse"],
+                        best["mae"],
+                    ):
+                        best = candidate
+
+    if best is None:
+        raise ValueError("ไม่สามารถ Tune แบบ Recency-weighted ได้")
+
+    return best
 
 
-            adjusted.append(
-                max(
-                    float(prediction),
-                    0.0
-                )
-            )
+def tune_station(
+    station_data: pd.DataFrame,
+    tuning_years: List[int],
+) -> Dict[str, Any]:
+    station_id = int(station_data["station_id"].iloc[0])
 
+    recency_factor = float(
+        VALIDATION_RECENCY_BY_STATION.get(
+            station_id,
+            1.0,
+        )
+    )
 
-        year_result = env_year.copy()
-
-
-        year_result[
-            "predicted_mackerel_ton"
-        ] = np.asarray(
-            adjusted
+    if recency_factor <= 1.0:
+        config = tune_station_standard(
+            station_data,
+            tuning_years,
         )
 
+        config["validation_recency_factor"] = 1.0
+        config["bias_strength"] = float(BIAS_STRENGTH)
 
-        # -------------------------------------------------
-        # ADD PREDICTED YEAR TO HISTORY
-        # -------------------------------------------------
+        return config
 
-        history_add = (
-            year_result
-            .rename(
-                columns={
-                    "predicted_mackerel_ton":
-                        "catch"
-                }
-            )[
-                [
-                    "year",
-                    "month",
-                    "sst",
-                    "chlorophyll_a",
-                    "rainfall",
-                    "wind_speed",
-                    "catch",
-                ]
-            ]
-        )
-
-
-        history = pd.concat(
-            [
-                history,
-                history_add
-            ],
-            ignore_index=True
-        )
-
-
-        environment_history = pd.concat(
-            [
-                environment_history,
-                env_year[
-                    [
-                        "year",
-                        "month",
-                        "sst",
-                        "chlorophyll_a",
-                        "rainfall",
-                        "wind_speed",
-                    ]
-                ]
-            ],
-            ignore_index=True
-        )
-
-
-        if year == selected_year:
-
-            selected_result = (
-                year_result
-            )
-
-
-    if selected_result is None:
-
-        raise ValueError(
-            "ไม่สามารถสร้างข้อมูล "
-            "คาดการณ์ปีอนาคตได้"
-        )
-
-
-    return (
-        selected_result,
-        bundle,
-        "Future recursive forecast",
-        train_df
+    return tune_station_recency(
+        station_data,
+        tuning_years,
+        recency_factor,
     )
 
 
-# =========================================================
-# SAVE FORECAST GRAPHS
-# =========================================================
-
-def save_forecast_graph(
-    result: pd.DataFrame,
-    selected_year: int
-) -> None:
-
-    os.makedirs(
-        OUTPUT_DIR,
-        exist_ok=True
-    )
-
-
-    # -----------------------------------------------------
-    # CATCH
-    # -----------------------------------------------------
-
-    plt.figure(
-        figsize=(12, 5)
-    )
-
-
-    plt.plot(
-        result["month"],
-        result[
-            "predicted_mackerel_ton"
-        ],
-        marker="o",
-        linewidth=2,
-        label="Predicted",
-    )
-
-
-    if (
-        "actual_mackerel_ton"
-        in result.columns
-    ):
-
-        plt.plot(
-            result["month"],
-            result[
-                "actual_mackerel_ton"
-            ],
-            marker="o",
-            linewidth=2,
-            linestyle="--",
-            label="Actual",
-        )
-
-
-    plt.xticks(
-        range(1, 13)
-    )
-
-    plt.xlabel(
-        "Month"
-    )
-
-    plt.ylabel(
-        "Mackerel catch (ton)"
-    )
-
-    plt.title(
-        f"Monthly Mackerel Catch - "
-        f"Year {selected_year}"
-    )
-
-    plt.grid(True)
-
-    plt.legend()
-
-    plt.tight_layout()
-
-
-    plt.savefig(
-        os.path.join(
-            OUTPUT_DIR,
-            "regression_fish.png"
-        ),
-        dpi=170
-    )
-
-
-    plt.close()
-
-
-    # -----------------------------------------------------
-    # SST
-    # -----------------------------------------------------
-
-    plt.figure(
-        figsize=(12, 5)
-    )
-
-
-    plt.plot(
-        result["month"],
-        result["sst"],
-        marker="o",
-        linewidth=2
-    )
-
-
-    plt.xticks(
-        range(1, 13)
-    )
-
-    plt.xlabel(
-        "Month"
-    )
-
-    plt.ylabel(
-        "Sea surface temperature (C)"
-    )
-
-    plt.title(
-        f"Monthly Sea Surface Temperature - "
-        f"Year {selected_year}"
-    )
-
-    plt.grid(True)
-
-    plt.tight_layout()
-
-
-    plt.savefig(
-        os.path.join(
-            OUTPUT_DIR,
-            "regression_sst.png"
-        ),
-        dpi=170
-    )
-
-
-    plt.close()
-
-
-    # -----------------------------------------------------
-    # CHLOROPHYLL
-    # -----------------------------------------------------
-
-    plt.figure(
-        figsize=(12, 5)
-    )
-
-
-    plt.plot(
-        result["month"],
-        result[
-            "chlorophyll_a"
-        ],
-        marker="o",
-        linewidth=2
-    )
-
-
-    plt.xticks(
-        range(1, 13)
-    )
-
-    plt.xlabel(
-        "Month"
-    )
-
-    plt.ylabel(
-        "Chlorophyll-a (mg/m3)"
-    )
-
-    plt.title(
-        f"Monthly Chlorophyll-a - "
-        f"Year {selected_year}"
-    )
-
-    plt.grid(True)
-
-    plt.tight_layout()
-
-
-    plt.savefig(
-        os.path.join(
-            OUTPUT_DIR,
-            "regression_chlor.png"
-        ),
-        dpi=170
-    )
-
-
-    plt.close()
-
-
-    # -----------------------------------------------------
-    # RAINFALL
-    # -----------------------------------------------------
-
-    plt.figure(
-        figsize=(12, 5)
-    )
-
-
-    plt.plot(
-        result["month"],
-        result["rainfall"],
-        marker="o",
-        linewidth=2
-    )
-
-
-    plt.xticks(
-        range(1, 13)
-    )
-
-    plt.xlabel(
-        "Month"
-    )
-
-    plt.ylabel(
-        "Rainfall"
-    )
-
-    plt.title(
-        f"Monthly Rainfall - "
-        f"Year {selected_year}"
-    )
-
-    plt.grid(True)
-
-    plt.tight_layout()
-
-
-    plt.savefig(
-        os.path.join(
-            OUTPUT_DIR,
-            "regression_rainfall.png"
-        ),
-        dpi=170
-    )
-
-
-    plt.close()
-
-
-    # -----------------------------------------------------
-    # WIND SPEED
-    # -----------------------------------------------------
-
-    plt.figure(
-        figsize=(12, 5)
-    )
-
-
-    plt.plot(
-        result["month"],
-        result["wind_speed"],
-        marker="o",
-        linewidth=2
-    )
-
-
-    plt.xticks(
-        range(1, 13)
-    )
-
-    plt.xlabel(
-        "Month"
-    )
-
-    plt.ylabel(
-        "Wind Speed"
-    )
-
-    plt.title(
-        f"Monthly Wind Speed - "
-        f"Year {selected_year}"
-    )
-
-    plt.grid(True)
-
-    plt.tight_layout()
-
-
-    plt.savefig(
-        os.path.join(
-            OUTPUT_DIR,
-            "regression_wind.png"
-        ),
-        dpi=170
-    )
-
-
-    plt.close()
-
-
-# =========================================================
-# SAVE VALIDATION OUTPUTS
-# =========================================================
-
-def save_validation_outputs(
-    validation_rows: pd.DataFrame,
-    metrics: Dict[str, Any],
-    diagnostics: Dict[str, Any],
-    chosen: Dict[str, Any],
-) -> None:
-
-    os.makedirs(
-        OUTPUT_DIR,
-        exist_ok=True
-    )
-
-
-    if not validation_rows.empty:
-
-        validation_rows.to_csv(
-            os.path.join(
-                OUTPUT_DIR,
-                "regression_model_evaluation.csv"
-            ),
-            index=False,
-            encoding="utf-8-sig",
-        )
-
-
-    stale_relationship = os.path.join(
-        OUTPUT_DIR,
-        "regression_environment_relationship.csv"
-    )
-
-
-    if os.path.exists(
-        stale_relationship
-    ):
-
-        try:
-
-            os.remove(
-                stale_relationship
-            )
-
-        except OSError:
-
-            pass
-
-
-    with open(
-        os.path.join(
-            OUTPUT_DIR,
-            "regression_model_metrics.json"
-        ),
-        "w",
-        encoding="utf-8"
-    ) as file:
-
-        json.dump(
-            {
-                "validation_metrics":
-                    metrics,
-
-                "diagnostics":
-                    diagnostics,
-
-                "annual_calibration":
-                    chosen.get(
-                        "annual_calibration",
-                        "none"
-                    ),
-
-                "annual_calibration_weight":
-                    chosen.get(
-                        "annual_calibration_weight",
-                        0.0
-                    ),
-
-                "guardrail":
-                    chosen.get(
-                        "guardrail",
-                        "none"
-                    ),
-
-                "environment_features": [
-                    "SST",
-                    "Chlorophyll-a",
-                    "Rainfall",
-                    "Wind Speed",
-                ],
-            },
-
-            file,
-
-            ensure_ascii=False,
-
-            indent=2,
-
-            allow_nan=False,
-        )
-
-
-# =========================================================
-# BUILD VALIDATION ROWS
-# =========================================================
-
-def build_validation_rows(
+def evaluate_holdout(
     data: pd.DataFrame,
-    chosen: Dict[str, Any]
-) -> pd.DataFrame:
+    holdout_year: int,
+) -> Tuple[pd.DataFrame, pd.DataFrame, Dict[int, Dict[str, Any]]]:
+    """
+    ประเมินโมเดลบน Holdout year พร้อมตัวชี้วัดเพิ่มเติม
 
-    rows: List[
-        pd.DataFrame
-    ] = []
+    NRMSE:
+        RMSE / Mean(Actual) × 100
 
+    Mean Baseline:
+        ใช้ค่าเฉลี่ย Catch ของข้อมูล Train ของจังหวัดนั้น
+        เป็นค่าคาดการณ์ทุกเดือนใน Holdout
+        โดยไม่ใช้ข้อมูล Holdout ในการสร้าง Baseline
+    """
+    tuning_years = tuning_years_for_holdout(holdout_year)
 
-    for year in chosen.get(
-        "validation_years",
-        []
-    ):
+    metric_rows = []
+    prediction_rows = []
+    configs: Dict[int, Dict[str, Any]] = {}
 
-        train_df = data[
-            data["year"]
-            < int(year)
-        ].copy()
+    overall_actual: List[float] = []
+    overall_prediction: List[float] = []
+    overall_baseline_prediction: List[float] = []
 
+    for station_id in sorted(data["station_id"].unique()):
+        station_data = data[data["station_id"] == station_id].copy()
 
-        test_df = data[
-            data["year"]
-            == int(year)
-        ].copy()
+        config = tune_station(station_data, tuning_years)
+        configs[int(station_id)] = config
 
+        train = station_data[station_data["year"] < holdout_year]
+        test = station_data[station_data["year"] == holdout_year]
 
-        if (
-            train_df.empty
-            or test_df.empty
-        ):
+        if train.empty or test.empty:
             continue
 
+        raw, _ = fit_raw(
+            train,
+            test,
+            config["decay"],
+            bool(config.get("use_sss", True)),
+        )
 
-        train_df, test_df = (
-            impute_environment_for_training(
-                train_df,
-                test_df
+        seasonal_mean, seasonal_max = seasonal_reference(
+            train,
+            test,
+        )
+
+        prediction = apply_calibration(
+            raw,
+            seasonal_mean,
+            seasonal_max,
+            config["model_weight"],
+            config["cap_multiplier"],
+        )
+
+        prediction = apply_bias_correction(
+            prediction,
+            config.get("bias", 0.0),
+        )
+
+        # ----------------------------
+        # Model metrics
+        # ----------------------------
+        metric = calculate_metrics(
+            test["catch"],
+            prediction,
+        )
+
+        nrmse_percent = calculate_nrmse_percent(
+            test["catch"],
+            metric["rmse"],
+        )
+
+        # ----------------------------
+        # Mean Baseline
+        # ----------------------------
+        baseline_mean = float(
+            train["catch"].mean()
+        )
+
+        baseline_prediction = np.full(
+            len(test),
+            baseline_mean,
+            dtype=float,
+        )
+
+        baseline_metric = calculate_metrics(
+            test["catch"],
+            baseline_prediction,
+        )
+
+        province = str(
+            station_data["station_name"].iloc[0]
+        )
+
+        metric_rows.append(
+            {
+                "station_id": int(station_id),
+                "province": province,
+                "train_years": f"{START_YEAR}-{holdout_year - 1}",
+                "test_year": int(holdout_year),
+                "mae": metric["mae"],
+                "rmse": metric["rmse"],
+                "nrmse_percent": nrmse_percent,
+                "r2": metric["r2"],
+                "baseline_mae": baseline_metric["mae"],
+                "baseline_rmse": baseline_metric["rmse"],
+                "baseline_mean": baseline_mean,
+                # Alpha = prediction cap multiplier
+                "alpha": config["cap_multiplier"],
+                "weight": config["model_weight"],
+                "bias": config.get("bias", 0.0),
+                "decay": config["decay"],
+                "use_sss": bool(config.get("use_sss", True)),
+            }
+        )
+
+        for index, row in enumerate(
+            test.itertuples(index=False)
+        ):
+            prediction_rows.append(
+                {
+                    "station_id": int(station_id),
+                    "province": province,
+                    "year": int(row.year),
+                    "month": int(row.month),
+                    "sst": float(row.sst),
+                    "chlorophyll_a": float(row.chlorophyll_a),
+                    "sss": float(row.sss),
+                    "rainfall": float(row.rainfall),
+                    "wind_speed": float(row.wind_speed),
+                    "air_temperature": float(row.air_temperature),
+                    "wind_direction": float(row.wind_direction),
+                    "actual_catch": float(row.catch),
+                    "predicted_catch": float(prediction[index]),
+                    "baseline_prediction": float(
+                        baseline_prediction[index]
+                    ),
+                    "absolute_error": abs(
+                        float(row.catch)
+                        - float(prediction[index])
+                    ),
+                    "baseline_absolute_error": abs(
+                        float(row.catch)
+                        - float(baseline_prediction[index])
+                    ),
+                }
             )
+
+        overall_actual.extend(
+            test["catch"].tolist()
+        )
+        overall_prediction.extend(
+            prediction.tolist()
+        )
+        overall_baseline_prediction.extend(
+            baseline_prediction.tolist()
         )
 
+    # ----------------------------
+    # Overall metrics
+    # ----------------------------
+    overall = calculate_metrics(
+        overall_actual,
+        overall_prediction,
+    )
 
-        bundle = fit_model(
-            train_df,
-            str(
-                chosen["name"]
-            ),
-            list(
-                chosen["features"]
-            ),
-            str(
-                chosen["target_transform"]
-            ),
-            str(
-                chosen.get(
-                    "model_type",
-                    "ols"
-                )
-            ),
-            float(
-                chosen.get(
-                    "alpha",
-                    0.0
-                )
-            ),
-            float(
-                chosen.get(
-                    "blend_weight",
-                    1.0
-                )
-            ),
-            int(
-                chosen.get(
-                    "n_components",
-                    0
-                )
-            ),
-        )
+    overall_baseline = calculate_metrics(
+        overall_actual,
+        overall_baseline_prediction,
+    )
 
+    overall_nrmse = calculate_nrmse_percent(
+        overall_actual,
+        overall["rmse"],
+    )
 
-        prediction = predict_bundle(
-            bundle,
-            test_df,
-            train_df
-        )
-
-
-        prediction = (
-            apply_selected_calibration(
-                prediction,
-                train_df,
-                test_df,
-                int(year),
-                chosen
-            )
-        )
-
-
-        fold = test_df[
-            [
-                "year",
-                "month",
-                "sst",
-                "chlorophyll_a",
-                "rainfall",
-                "wind_speed",
-                "catch",
-            ]
-        ].copy()
-
-
-        fold.rename(
-            columns={
-                "catch":
-                    "actual_mackerel_ton"
-            },
-            inplace=True
-        )
-
-
-        fold[
-            "predicted_mackerel_ton"
-        ] = prediction
-
-
-        fold["error_ton"] = (
-            fold[
-                "predicted_mackerel_ton"
-            ]
-            -
-            fold[
-                "actual_mackerel_ton"
-            ]
-        )
-
-
-        fold[
-            "absolute_error_ton"
-        ] = np.abs(
-            fold["error_ton"]
-        )
-
-
-        rows.append(
-            fold
-        )
-
+    metric_rows.append(
+        {
+            "station_id": None,
+            "province": "OVERALL",
+            "train_years": f"{START_YEAR}-{holdout_year - 1}",
+            "test_year": int(holdout_year),
+            "mae": overall["mae"],
+            "rmse": overall["rmse"],
+            "nrmse_percent": overall_nrmse,
+            "r2": overall["r2"],
+            "baseline_mae": overall_baseline["mae"],
+            "baseline_rmse": overall_baseline["rmse"],
+            "baseline_mean": None,
+            "alpha": None,
+            "weight": None,
+            "bias": None,
+            "decay": None,
+            "use_sss": None,
+        }
+    )
 
     return (
-        pd.concat(
-            rows,
-            ignore_index=True
-        )
-        if rows
-        else pd.DataFrame()
+        pd.DataFrame(metric_rows),
+        pd.DataFrame(prediction_rows),
+        configs,
     )
 
 
-# =========================================================
-# CLEAN OUTPUT
-# =========================================================
+# 7) เทรนโมเดลใช้งานจริง
+def build_month_reference(train: pd.DataFrame) -> Dict[int, Dict[str, float]]:
+    reference: Dict[int, Dict[str, float]] = {}
+    for month in range(1, 13):
+        values = train.loc[train["month"] == month, "catch"]
+        if values.empty:
+            values = train["catch"]
+        reference[month] = {
+            "mean": float(values.mean()),
+            "max": float(values.max()),
+        }
+    return reference
 
-def clean_result_for_output(
-    result: pd.DataFrame,
-    province: str
-) -> pd.DataFrame:
 
-    output = result.copy()
+def train_final_models(
+    data: pd.DataFrame,
+    configs: Dict[int, Dict[str, Any]],
+) -> Dict[int, Dict[str, Any]]:
+    bundles: Dict[int, Dict[str, Any]] = {}
+
+    for station_id, config in configs.items():
+        train = data[data["station_id"] == station_id].copy()
+        if train.empty:
+            continue
+
+        # เทรนโมเดลสุดท้ายด้วยข้อมูลทั้งหมด
+        _, model = fit_raw(train, train.iloc[:1].copy(), config["decay"], bool(config.get("use_sss", True)))
+
+        bundles[int(station_id)] = {
+            "model": model,
+            "config": config,
+            "month_reference": build_month_reference(train),
+            "station_name": str(train["station_name"].iloc[0]),
+            "train_start_year": int(train["year"].min()),
+            "train_end_year": int(train["year"].max()),
+        }
+
+    return bundles
 
 
-    output.insert(
-        0,
-        "province",
-        province
+def predict_with_bundle(
+    bundle: Dict[str, Any],
+    feature_frame: pd.DataFrame,
+) -> np.ndarray:
+    raw = np.maximum(bundle["model"].predict(feature_frame), 0.0)
+
+    means = np.asarray(
+        [
+            bundle["month_reference"][int(month)]["mean"]
+            for month in feature_frame["month"]
+        ],
+        dtype=float,
+    )
+    maximums = np.asarray(
+        [
+            bundle["month_reference"][int(month)]["max"]
+            for month in feature_frame["month"]
+        ],
+        dtype=float,
+    )
+
+    config = bundle["config"]
+    prediction = apply_calibration(
+        raw,
+        means,
+        maximums,
+        config["model_weight"],
+        config["cap_multiplier"],
+    )
+
+    return apply_bias_correction(
+        prediction,
+        config.get("bias", 0.0),
     )
 
 
-    output.rename(
-        columns={
-            "year": "year",
-            "month": "month",
-            "sst": "sst",
-            "chlorophyll_a":
-                "chlor_a",
-            "rainfall":
-                "rainfall",
-            "wind_speed":
-                "wind_speed",
-        },
-        inplace=True
+def metric_dict_for_station(
+    metrics_df: pd.DataFrame,
+    station_id: int,
+) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    province_row = metrics_df[
+        metrics_df["station_id"] == station_id
+    ]
+    overall_row = metrics_df[
+        metrics_df["province"] == "OVERALL"
+    ]
+
+    if province_row.empty:
+        raise ValueError("ไม่พบ Performance ของจังหวัดที่เลือก")
+
+    p = province_row.iloc[0]
+    o = overall_row.iloc[0]
+
+    province_metrics = {
+        "mae": round(float(p["mae"]), 6),
+        "rmse": round(float(p["rmse"]), 6),
+        "nrmse_percent": round(float(p["nrmse_percent"]), 6),
+        "r2": round(float(p["r2"]), 6),
+        "baseline_mae": round(float(p["baseline_mae"]), 6),
+        "baseline_rmse": round(float(p["baseline_rmse"]), 6),
+        "baseline_mean": round(float(p["baseline_mean"]), 6),
+        "rows": 12,
+    }
+
+    overall_metrics = {
+        "mae": round(float(o["mae"]), 6),
+        "rmse": round(float(o["rmse"]), 6),
+        "nrmse_percent": round(float(o["nrmse_percent"]), 6),
+        "r2": round(float(o["r2"]), 6),
+        "baseline_mae": round(float(o["baseline_mae"]), 6),
+        "baseline_rmse": round(float(o["baseline_rmse"]), 6),
+        "rows": int(
+            metrics_df[metrics_df["province"] != "OVERALL"].shape[0] * 12
+        ),
+    }
+
+    return province_metrics, overall_metrics
+
+
+def prepare_runtime():
+    stations, catch, env, weather = load_database()
+    data, feature_rows, source_summary = build_supervised_data(
+        stations,
+        catch,
+        env,
+        weather,
     )
 
-
-    numeric_columns = (
-        output
-        .select_dtypes(
-            include=[np.number]
-        )
-        .columns
-    )
-
-
-    output[
-        numeric_columns
-    ] = output[
-        numeric_columns
-    ].round(4)
-
-
-    return output
-
-
-# =========================================================
-# MAIN
-# =========================================================
-
-def main() -> None:
-
-    requested_province, selected_year, selected_month = (
-        read_args()
-    )
-
-
-    # -----------------------------------------------------
-    # DATABASE
-    # -----------------------------------------------------
-
-    db_config = (
-        read_php_database_config()
-    )
-
-
-    connection, driver_name = (
-        connect_database(
-            db_config
-        )
-    )
-
-
-    try:
-
-        station_id, database_province = (
-            resolve_station(
-                connection,
-                requested_province
-            )
-        )
-
-
-        raw_data, source_counts = (
-            load_database_data(
-                connection,
-                station_id
-            )
-        )
-
-
-    finally:
-
-        connection.close()
-
-
-    # -----------------------------------------------------
-    # FEATURES
-    # -----------------------------------------------------
-
-    data = add_features(
-        raw_data
-    )
-
-
-    # -----------------------------------------------------
-    # MODEL SELECTION
-    # -----------------------------------------------------
-
-    base_chosen, candidate_results = (
-        walk_forward_validation(
-            data
-        )
-    )
-
-
-    chosen, calibration_results = (
-        select_prediction_calibration(
-            data,
-            base_chosen
-        )
-    )
-
-
-    # -----------------------------------------------------
-    # PREDICTION
-    # -----------------------------------------------------
-
-    (
-        result,
-        prediction_bundle,
-        prediction_mode,
-        diagnostics_train
-    ) = predict_selected_year(
-        selected_year,
+    holdout_year = int(source_summary["holdout_year"])
+    metrics_df, holdout_predictions, configs = evaluate_holdout(
         data,
-        chosen
+        holdout_year,
     )
-
-
-    # -----------------------------------------------------
-    # DIAGNOSTICS
-    # -----------------------------------------------------
-
-    diagnostics = model_diagnostics(
-        prediction_bundle,
-        diagnostics_train
-    )
-
-
-    # -----------------------------------------------------
-    # ENVIRONMENT RELATIONSHIP
-    # -----------------------------------------------------
-
-    environment_relationship = (
-        analyze_environment_relationship(
-            data
-        )
-    )
-
-
-    # -----------------------------------------------------
-    # VALIDATION
-    # -----------------------------------------------------
-
-    validation_rows = (
-        build_validation_rows(
-            data,
-            chosen
-        )
-    )
-
-
-    validation_metrics = dict(
-        chosen["metrics"]
-    )
-
-
-    latest_fold = (
-        chosen["folds"][-1]
-        if chosen.get("folds")
-        else {}
-    )
-
-
-    # -----------------------------------------------------
-    # SELECT MONTH
-    # -----------------------------------------------------
-
-    selected_rows = result[
-        result["month"]
-        == selected_month
-    ]
-
-
-    if selected_rows.empty:
-
-        raise ValueError(
-            f"ไม่พบข้อมูลเดือน "
-            f"{selected_month}"
-        )
-
-
-    selected_row = (
-        selected_rows.iloc[0]
-    )
-
-
-    # -----------------------------------------------------
-    # OUTPUT
-    # -----------------------------------------------------
-
-    output_result = (
-        clean_result_for_output(
-            result,
-            requested_province
-        )
-    )
-
-
-    os.makedirs(
-        OUTPUT_DIR,
-        exist_ok=True
-    )
-
-
-    safe_province = re.sub(
-        r"[\\/:*?\"<>|]",
-        "_",
-        requested_province
-    )
-
-
-    csv_name = (
-        f"{safe_province}"
-        f"_predicted_linear.csv"
-    )
-
-
-    output_result.to_csv(
-        os.path.join(
-            OUTPUT_DIR,
-            csv_name
-        ),
-        index=False,
-        encoding="utf-8-sig",
-    )
-
-
-    # -----------------------------------------------------
-    # GRAPHS
-    # -----------------------------------------------------
-
-    save_forecast_graph(
-        result,
-        selected_year
-    )
-
-
-    # -----------------------------------------------------
-    # SAVE MODEL OUTPUTS
-    # -----------------------------------------------------
-
-    save_validation_outputs(
-        validation_rows,
-        validation_metrics,
-        diagnostics,
-        chosen,
-    )
-
-
-    # -----------------------------------------------------
-    # TOP CANDIDATES
-    # -----------------------------------------------------
-
-    candidate_summary = [
-        {
-            "name":
-                candidate["name"],
-
-            "target_transform":
-                candidate[
-                    "target_transform"
-                ],
-
-            "model_type":
-                candidate.get(
-                    "model_type",
-                    "ols"
-                ),
-
-            "alpha":
-                candidate.get(
-                    "alpha",
-                    0.0
-                ),
-
-            "n_components":
-                candidate.get(
-                    "n_components",
-                    0
-                ),
-
-            "blend_weight":
-                candidate.get(
-                    "blend_weight",
-                    1.0
-                ),
-
-            "rmse":
-                candidate[
-                    "metrics"
-                ].get("rmse"),
-
-            "mae":
-                candidate[
-                    "metrics"
-                ].get("mae"),
-
-            "r2":
-                candidate[
-                    "metrics"
-                ].get("r2"),
-        }
-
-        for candidate
-        in candidate_results[:5]
-    ]
-
-
-    candidate_csv_name = (
-        "regression_candidate_comparison.csv"
-    )
-
-
-    pd.DataFrame(
-        candidate_summary
-    ).to_csv(
-        os.path.join(
-            OUTPUT_DIR,
-            candidate_csv_name
-        ),
-        index=False,
-        encoding="utf-8-sig",
-    )
-
-
-    # -----------------------------------------------------
-    # CALIBRATION SUMMARY
-    # -----------------------------------------------------
-
-    calibration_summary = [
-        {
-            "annual_calibration":
-                item[
-                    "annual_calibration"
-                ],
-
-            "annual_calibration_weight":
-                item[
-                    "annual_calibration_weight"
-                ],
-
-            "guardrail":
-                item[
-                    "guardrail"
-                ],
-
-            "rmse":
-                item[
-                    "metrics"
-                ].get("rmse"),
-
-            "mae":
-                item[
-                    "metrics"
-                ].get("mae"),
-
-            "p90_absolute_error":
-                item[
-                    "metrics"
-                ].get(
-                    "p90_absolute_error"
-                ),
-        }
-
-        for item
-        in calibration_results[:5]
-    ]
-
-
-    # -----------------------------------------------------
-    # SELECTED ENVIRONMENT
-    # -----------------------------------------------------
-
-    selected_rainfall = (
-        finite_or_none(
-            round(
-                float(
-                    selected_row[
-                        "rainfall"
-                    ]
-                ),
-                4
-            )
-        )
-    )
-
-
-    selected_wind_speed = (
-        finite_or_none(
-            round(
-                float(
-                    selected_row[
-                        "wind_speed"
-                    ]
-                ),
-                4
-            )
-        )
-    )
-
-
-    # -----------------------------------------------------
-    # RESPONSE
-    # -----------------------------------------------------
-
-    response = {
-
-        "status":
-            "success",
-
-        "province":
-            requested_province,
-
-        "database_province":
-            database_province,
-
-        "station_id":
-            station_id,
-
-        "year":
-            int(selected_year),
-
-        "month":
-            int(selected_month),
-
-        "sst":
-            round(
-                float(
-                    selected_row["sst"]
-                ),
-                4
-            ),
-
-        "chlor_a":
-            round(
-                float(
-                    selected_row[
-                        "chlorophyll_a"
-                    ]
-                ),
-                4
-            ),
-
-        "rainfall":
-            selected_rainfall,
-
-        "wind_speed":
-            selected_wind_speed,
-
-        "ton":
-            round(
-                float(
-                    selected_row[
-                        "predicted_mackerel_ton"
-                    ]
-                ),
-                4
-            ),
-
-        "actual_ton":
-            round(
-                float(
-                    selected_row[
-                        "actual_mackerel_ton"
-                    ]
-                ),
-                4
-            )
-            if (
-                "actual_mackerel_ton"
-                in selected_row.index
-            )
-            else None,
-
-        "prediction_mode":
-            prediction_mode,
-
-        "data_source":
-            (
-                "MySQL database: "
-                "catch_mackereldata + "
-                "marine_environment + "
-                "weather_data"
-            ),
-
-        "database_driver":
-            driver_name,
-
-        "data_year_start":
-            int(
-                data["year"].min()
-            ),
-
-        "data_year_end":
-            int(
-                data["year"].max()
-            ),
-
-        "source_counts":
-            source_counts,
-
-        "environment_relationship":
-            environment_relationship,
-
-        "model": {
-
-            "selected_name":
-                chosen["name"],
-
-            "target_transform":
-                chosen[
-                    "target_transform"
-                ],
-
-            "model_type":
-                chosen.get(
-                    "model_type",
-                    "ols"
-                ),
-
-            "alpha":
-                chosen.get(
-                    "alpha",
-                    0.0
-                ),
-
-            "n_components":
-                chosen.get(
-                    "n_components",
-                    0
-                ),
-
-            "blend_weight":
-                chosen.get(
-                    "blend_weight",
-                    1.0
-                ),
-
-            "features": [
-                FEATURE_LABELS.get(
-                    feature,
-                    feature
-                )
-                for feature
-                in chosen["features"]
-            ],
-
-            "environment_features": [
-                "SST",
-                "Chlorophyll-a",
-                "Rainfall",
-                "Wind Speed",
-            ],
-
-            "validation_method":
-                (
-                    "Expanding-window "
-                    "walk-forward validation "
-                    "by year"
-                ),
-
-            "model_selection_rule":
-                (
-                    "Lowest walk-forward RMSE, "
-                    "then MAE and "
-                    "90th-percentile "
-                    "absolute error"
-                ),
-
-            "validation_years":
-                chosen.get(
-                    "validation_years",
-                    []
-                ),
-
-            "validation_metrics":
-                validation_metrics,
-
-            "latest_holdout_metrics":
-                latest_fold,
-
-            "candidate_summary":
-                candidate_summary,
-
-            "calibration_summary":
-                calibration_summary,
-
-            "annual_calibration":
-                chosen.get(
-                    "annual_calibration",
-                    "none"
-                ),
-
-            "annual_calibration_label":
-                ANNUAL_CALIBRATION_LABELS.get(
-                    chosen.get(
-                        "annual_calibration",
-                        "none"
-                    ),
-                    chosen.get(
-                        "annual_calibration",
-                        "none"
-                    )
-                ),
-
-            "annual_calibration_weight":
-                chosen.get(
-                    "annual_calibration_weight",
-                    0.0
-                ),
-
-            "guardrail":
-                chosen.get(
-                    "guardrail",
-                    "none"
-                ),
-
-            "guardrail_label":
-                GUARDRAIL_LABELS.get(
-                    chosen.get(
-                        "guardrail",
-                        "none"
-                    ),
-                    chosen.get(
-                        "guardrail",
-                        "none"
-                    )
-                ),
-
-            "diagnostics":
-                diagnostics,
-        },
-
-
-        "csv":
-            "output/" + csv_name,
-
-        "evaluation_csv":
-            "output/regression_model_evaluation.csv",
-
-        "candidate_csv":
-            "output/" + candidate_csv_name,
-
-        "metrics_json":
-            "output/regression_model_metrics.json",
-
-        "fish_graph":
-            "output/regression_fish.png",
-
-        "sst_graph":
-            "output/regression_sst.png",
-
-        "chlor_graph":
-            "output/regression_chlor.png",
-
-        "rainfall_graph":
-            "output/regression_rainfall.png",
-
-        "wind_graph":
-            "output/regression_wind.png",
+    bundles = train_final_models(data, configs)
+
+    return {
+        "stations": stations,
+        "catch": catch,
+        "env": env,
+        "weather": weather,
+        "feature_rows": feature_rows,
+        "data": data,
+        "source_summary": source_summary,
+        "metrics": metrics_df,
+        "holdout_predictions": holdout_predictions,
+        "configs": configs,
+        "bundles": bundles,
     }
 
 
-    send_json(
-        response
+# 8) เตรียมผลลัพธ์สำหรับหน้าเว็บ
+def actual_catch_for_month(
+    catch: pd.DataFrame,
+    station_id: int,
+    year: int,
+    month: int,
+):
+    match = catch[
+        (catch["station_id"] == station_id)
+        & (catch["year"] == year)
+        & (catch["month"] == month)
+    ]
+    if match.empty:
+        return None
+    return float(match["catch"].iloc[0])
+
+
+def model_json(
+    runtime: Dict[str, Any],
+    station_id: int,
+) -> Dict[str, Any]:
+    province_metrics, overall_metrics = metric_dict_for_station(
+        runtime["metrics"],
+        station_id,
+    )
+    config = runtime["configs"][station_id]
+    summary = runtime["source_summary"]
+
+    use_sss = bool(config.get("use_sss", True))
+    feature_names = [
+        "SST",
+        "Chlorophyll-a",
+    ]
+    if use_sss:
+        feature_names.append("Sea Surface Salinity (SSS)")
+    feature_names.extend([
+        "Rainfall",
+        "Wind Speed",
+        "Air Temperature",
+        "Wind Direction sin/cos",
+        "Year Index",
+        "Month One-Hot",
+    ])
+
+    use_slp = bool(
+        USE_SEA_LEVEL_PRESSURE_BY_STATION.get(station_id, False)
+    )
+    use_monsoon = bool(
+        USE_MONSOON_BY_STATION.get(station_id, False)
+    )
+
+    if use_slp:
+        feature_names.append("Sea Level Pressure")
+    if use_monsoon:
+        feature_names.append("Monsoon One-Hot")
+
+    return {
+        "name": "Hybrid Linear Regression (Selective SLP; Monsoon tested but disabled)",
+        "features": feature_names,
+        "validation_metrics": province_metrics,
+        "overall_metrics": overall_metrics,
+        "r2_note": "R² รายจังหวัดอาจติดลบได้เมื่อ Test มีเพียง 12 เดือน; หน้าเว็บจะแสดง Overall R² สำหรับภาพรวมระบบ",
+        "holdout_year": int(summary["holdout_year"]),
+        "train_years": f"{START_YEAR}-{int(summary['holdout_year']) - 1}",
+        "alpha": config["cap_multiplier"],
+        "weight": float(config["model_weight"]),
+        "bias": float(config.get("bias", 0.0)),
+        "bias_strength": float(config.get("bias_strength", BIAS_STRENGTH)),
+        "bias_method": config.get("bias_method", "none"),
+        "decay": float(config["decay"]),
+        "validation_recency_factor": float(
+            config.get("validation_recency_factor", 1.0)
+        ),
+        "use_sss": use_sss,
+        "use_sea_level_pressure": use_slp,
+        "use_monsoon": use_monsoon,
+        "sss_note": (
+            "ใช้ SSS ในโมเดลจังหวัดนี้"
+            if use_sss
+            else "ไม่ใช้ SSS ในโมเดลจังหวัดนี้ เพราะผลเปรียบเทียบเดิมแย่ลง"
+        ),
+        "final_train_years": (
+            f"{START_YEAR}-{int(summary['catch_max_year'])}"
+        ),
+    }
+
+
+# 9) สร้างกราฟ Actual vs Prediction
+def generate_graphs_for_year(
+    runtime: Dict[str, Any],
+    station_id: int,
+    year: int,
+) -> bool:
+    
+    """
+    สร้างกราฟ Actual vs Prediction
+    """
+    feature_rows = runtime["feature_rows"]
+
+    year_rows = feature_rows[
+        (feature_rows["station_id"] == station_id)
+        & (feature_rows["year"] == year)
+    ].copy()
+
+    if year_rows.empty:
+        return False
+
+    year_rows["year_index"] = year_rows["year"] - START_YEAR
+    year_rows = year_rows.sort_values("month").reset_index(drop=True)
+
+    # ใช้ผล Prediction จากโมเดลเดิมโดยตรง
+    # ส่วนนี้ไม่ได้แก้สูตรหรือค่า Parameter ของโมเดล
+    prediction = predict_with_bundle(
+        runtime["bundles"][station_id],
+        year_rows,
+    )
+
+    actual_rows = runtime["catch"][
+        (runtime["catch"]["station_id"] == station_id)
+        & (runtime["catch"]["year"] == year)
+    ][["month", "catch"]].copy()
+
+    plot_frame = year_rows.merge(
+        actual_rows,
+        on="month",
+        how="left",
+    )
+
+    plot_frame["predicted"] = prediction
+
+    # --------------------------------------------------------
+    # Missing Actual ไม่เท่ากับ 0
+    # --------------------------------------------------------
+    # หากฐานข้อมูลไม่มีข้อมูล catch ของเดือนนั้น ให้คงเป็น NaN
+    # Matplotlib จะเว้นเส้น Actual ในเดือนดังกล่าวโดยอัตโนมัติ
+    # การแก้ส่วนนี้มีผลเฉพาะ "กราฟ" เท่านั้น
+    plot_frame["catch"] = pd.to_numeric(
+        plot_frame["catch"],
+        errors="coerce",
+    )
+
+    plot_frame.loc[
+        plot_frame["catch"].notna(),
+        "catch",
+    ] = (
+        plot_frame.loc[
+            plot_frame["catch"].notna(),
+            "catch",
+        ]
+        .astype(float)
+        .clip(lower=0.0)
+    )
+
+    missing_months = (
+        plot_frame.loc[
+            plot_frame["catch"].isna(),
+            "month",
+        ]
+        .astype(int)
+        .tolist()
+    )
+
+    try:
+        import matplotlib
+
+        matplotlib.use("Agg")
+
+        import matplotlib.pyplot as plt
+
+    except Exception:
+        return False
+
+    # --------------------------------------------------------
+    # กราฟ Actual vs Prediction
+    # --------------------------------------------------------
+    fig, ax = plt.subplots(
+        figsize=(10, 5.2)
+    )
+
+    # Prediction แสดงต่อเนื่องครบทุกเดือนที่มี Feature
+    ax.plot(
+        plot_frame["month"],
+        plot_frame["predicted"],
+        marker="o",
+        linewidth=2,
+        label="Prediction",
+    )
+
+    # Actual: ให้เชื่อมเส้นข้ามเดือนที่ไม่มีข้อมูล
+    # แนวคิดคือ plot เฉพาะจุดที่มีข้อมูลจริง (non-NaN)
+    # ทำให้เส้นเชื่อมจากเดือนก่อนหน้าไปยังเดือนถัดไปที่มีข้อมูล
+    actual_valid_frame = plot_frame.loc[
+        plot_frame["catch"].notna(),
+        ["month", "catch"]
+    ].copy()
+
+    if not actual_valid_frame.empty:
+        ax.plot(
+            actual_valid_frame["month"],
+            actual_valid_frame["catch"],
+            marker="o",
+            linewidth=2,
+            label="Actual",
+        )
+    else:
+        # กรณีไม่มีข้อมูลจริงเลยทั้งปี ให้ยังคงมี legend
+        ax.plot(
+            [],
+            [],
+            marker="o",
+            linewidth=2,
+            label="Actual",
+        )
+
+    # --------------------------------------------------------
+    # ปรับแกน Y โดยไม่ให้ NaN กระทบ Scale
+    # --------------------------------------------------------
+    actual_valid = plot_frame["catch"].dropna()
+
+    y_candidates = [
+        float(
+            np.nanmax(
+                plot_frame["predicted"].to_numpy(
+                    dtype=float
+                )
+            )
+        ),
+        1.0,
+    ]
+
+    if not actual_valid.empty:
+        y_candidates.append(
+            float(
+                actual_valid.max()
+            )
+        )
+
+    y_max = max(
+        y_candidates
+    )
+
+    ax.set_ylim(
+        0,
+        y_max * 1.12,
+    )
+
+    # --------------------------------------------------------
+    # แสดงค่าจริงที่สูงผิดปกติ
+    # --------------------------------------------------------
+    if not actual_valid.empty:
+
+        peak_index = actual_valid.idxmax()
+
+        peak_value = float(
+            plot_frame.loc[
+                peak_index,
+                "catch",
+            ]
+        )
+
+        peak_month = int(
+            plot_frame.loc[
+                peak_index,
+                "month",
+            ]
+        )
+
+        non_peak = actual_valid.drop(
+            index=peak_index
+        )
+
+        reference = (
+            float(
+                non_peak.max()
+            )
+            if not non_peak.empty
+            else 0.0
+        )
+
+        if peak_value > max(
+            reference * 2.5,
+            30.0,
+        ):
+            ax.annotate(
+                f"Actual {peak_value:.0f} t",
+                xy=(
+                    peak_month,
+                    peak_value,
+                ),
+                xytext=(
+                    0,
+                    12,
+                ),
+                textcoords="offset points",
+                ha="center",
+                fontsize=9,
+            )
+
+    # --------------------------------------------------------
+    # แสดงข้อความ No data ตรงเดือนที่ไม่มี Actual
+    # --------------------------------------------------------
+    # วางข้อความใต้แกน X เพื่อไม่ให้ถูกเข้าใจว่าเป็นค่า 0 ตัน
+    for month in missing_months:
+        ax.text(
+            month,
+            -0.10,
+            "No data",
+            transform=ax.get_xaxis_transform(),
+            ha="center",
+            va="top",
+            fontsize=8,
+            rotation=45,
+        )
+
+    # --------------------------------------------------------
+    # รูปแบบกราฟ
+    # --------------------------------------------------------
+    ax.set_title(
+        f"Mackerel Catch - {year}"
+    )
+
+    ax.set_xlabel(
+        "Month"
+    )
+
+    ax.set_ylabel(
+        "Ton"
+    )
+
+    ax.set_xticks(
+        range(1, 13)
+    )
+
+    ax.set_xlim(
+        0.5,
+        12.5,
+    )
+
+    ax.grid(
+        True,
+        alpha=0.25,
+    )
+
+    ax.legend()
+
+    if missing_months:
+        missing_text = ", ".join(
+            str(month)
+            for month in missing_months
+        )
+
+        fig.text(
+            0.5,
+            0.015,
+            (
+                "Actual data unavailable for month(s): "
+                f"{missing_text} — not treated as 0"
+            ),
+            ha="center",
+            fontsize=9,
+        )
+
+        fig.tight_layout(
+            rect=[
+                0,
+                0.08,
+                1,
+                1,
+            ]
+        )
+
+    else:
+        fig.tight_layout()
+
+    fig.savefig(
+        OUTPUT_DIR
+        / "regression_fish.png",
+        dpi=140,
+    )
+
+    plt.close(
+        fig
+    )
+
+    # ลบกราฟสิ่งแวดล้อมเก่าที่อาจค้างจากเวอร์ชันก่อน
+    for old_graph in [
+        "regression_sst.png",
+        "regression_chlor.png",
+        "regression_sss.png",
+    ]:
+        old_path = (
+            OUTPUT_DIR
+            /
+            old_graph
+        )
+
+        if old_path.exists():
+            try:
+                old_path.unlink()
+
+            except OSError:
+                pass
+
+    return True
+
+
+# 10) คาดการณ์จากข้อมูลฐานข้อมูล
+def predict_database_mode(
+    province: str,
+    year: int,
+    month: int,
+) -> Dict[str, Any]:
+    runtime = prepare_runtime()
+    station_id, province_name = station_for_province(
+        runtime["stations"],
+        province,
+    )
+
+    if year < START_YEAR or year > REQUESTED_END_YEAR:
+        raise ValueError(
+            f"ปีต้องอยู่ระหว่าง {START_YEAR}-{REQUESTED_END_YEAR}"
+        )
+    if month < 1 or month > 12:
+        raise ValueError("เดือนต้องอยู่ระหว่าง 1-12")
+
+    feature = runtime["feature_rows"]
+    row = feature[
+        (feature["station_id"] == station_id)
+        & (feature["year"] == year)
+        & (feature["month"] == month)
+    ].copy()
+
+    if row.empty:
+        raise ValueError(
+            f"ไม่มี marine_environment/weather_data สำหรับ {province_name} "
+            f"ปี {year} เดือน {MONTH_NAMES_TH.get(month, month)}"
+        )
+
+    row["year_index"] = row["year"] - START_YEAR
+    prediction = float(
+        predict_with_bundle(runtime["bundles"][station_id], row)[0]
+    )
+
+    actual = actual_catch_for_month(
+        runtime["catch"],
+        station_id,
+        year,
+        month,
+    )
+
+    graphs_generated = generate_graphs_for_year(
+        runtime,
+        station_id,
+        year,
+    )
+
+    r = row.iloc[0]
+    return {
+        "status": "success",
+        "mode": "database",
+        "province": province_name,
+        "year": int(year),
+        "month": int(month),
+        "month_name": MONTH_NAMES_TH.get(month, str(month)),
+        "ton": round(prediction, 6),
+        "sst": round(float(r["sst"]), 6),
+        "chlor_a": round(float(r["chlorophyll_a"]), 6),
+        "sss": round(float(r["sss"]), 6),
+        "sss_used": bool(runtime["configs"][station_id].get("use_sss", True)),
+        "rainfall": round(float(r["rainfall"]), 6),
+        "wind_speed": round(float(r["wind_speed"]), 6),
+        "sea_level_pressure": round(float(r["sea_level_pressure"]), 6),
+        "monsoon": str(r["monsoon"]),
+        "air_temperature": round(float(r["air_temperature"]), 6),
+        "wind_direction": round(float(r["wind_direction"]), 6),
+        "actual_ton": None if actual is None else round(actual, 6),
+        "graphs_generated": bool(graphs_generated),
+        "model": model_json(runtime, station_id),
+        "source_summary": runtime["source_summary"],
+    }
+
+
+# 11) คาดการณ์จากค่าที่ผู้ใช้กำหนด
+def custom_weather_row(
+    weather: pd.DataFrame,
+    station_id: int,
+    year: int,
+    month: int,
+) -> Tuple[float, float, float, float, float, str, str]:
+    """
+    คืน Rainfall, Wind Speed, SLP, Air Temperature,
+    Wind Direction, Monsoon และแหล่งข้อมูล
+    """
+    exact = weather[
+        (weather["station_id"] == station_id)
+        & (weather["year"] == year)
+        & (weather["month"] == month)
+    ]
+
+    if not exact.empty:
+        return (
+            float(exact["rainfall"].iloc[0]),
+            float(exact["wind_speed"].iloc[0]),
+            float(exact["sea_level_pressure"].iloc[0]),
+            float(exact["air_temperature"].iloc[0]),
+            float(exact["wind_direction"].iloc[0]),
+            str(exact["monsoon"].iloc[0]),
+            "database_exact_month",
+        )
+
+    same_month = weather[
+        (weather["station_id"] == station_id)
+        & (weather["month"] == month)
+    ]
+
+    if same_month.empty:
+        same_month = weather[
+            weather["station_id"] == station_id
+        ]
+
+    if same_month.empty:
+        raise ValueError(
+            "ไม่มี weather_data สำหรับจังหวัดที่เลือก"
+        )
+
+    wind_rad = np.deg2rad(
+        same_month["wind_direction"].to_numpy(dtype=float)
+    )
+    wind_direction = float(
+        (
+            np.rad2deg(
+                np.arctan2(
+                    np.sin(wind_rad).mean(),
+                    np.cos(wind_rad).mean(),
+                )
+            )
+            + 360.0
+        )
+        % 360.0
+    )
+
+    monsoon_mode = (
+        same_month["monsoon"]
+        .astype(str)
+        .mode()
+    )
+    monsoon = (
+        str(monsoon_mode.iloc[0])
+        if not monsoon_mode.empty
+        else "Transition"
+    )
+
+    return (
+        float(same_month["rainfall"].median()),
+        float(same_month["wind_speed"].median()),
+        float(same_month["sea_level_pressure"].median()),
+        float(same_month["air_temperature"].median()),
+        wind_direction,
+        monsoon,
+        "historical_station_month_median",
     )
 
 
-# =========================================================
-# RUN
-# =========================================================
 
-if __name__ == "__main__":
+def predict_custom_mode(
+    province: str,
+    year: int,
+    month: int,
+    sst: float,
+    chlor_a: float,
+    sss: float,
+) -> Dict[str, Any]:
+    runtime = prepare_runtime()
+    station_id, province_name = station_for_province(
+        runtime["stations"],
+        province,
+    )
 
+    if year < START_YEAR or year > REQUESTED_END_YEAR:
+        raise ValueError(
+            f"ปีต้องอยู่ระหว่าง {START_YEAR}-{REQUESTED_END_YEAR}"
+        )
+    if month < 1 or month > 12:
+        raise ValueError("เดือนต้องอยู่ระหว่าง 1-12")
+    if not np.isfinite(sst) or sst <= 0:
+        raise ValueError("SST ต้องเป็นตัวเลขมากกว่า 0")
+    if not np.isfinite(chlor_a) or chlor_a <= 0:
+        raise ValueError("Chlorophyll-a ต้องเป็นตัวเลขมากกว่า 0")
+    if not np.isfinite(sss) or sss <= 0:
+        raise ValueError("SSS ต้องเป็นตัวเลขมากกว่า 0")
+
+    (
+        rainfall,
+        wind_speed,
+        sea_level_pressure,
+        air_temperature,
+        wind_direction,
+        monsoon,
+        weather_source,
+    ) = custom_weather_row(
+        runtime["weather"],
+        station_id,
+        year,
+        month,
+    )
+
+    row = pd.DataFrame(
+        [
+            {
+                "station_id": station_id,
+                "year": int(year),
+                "month": int(month),
+                "sst": float(sst),
+                "chlorophyll_a": float(chlor_a),
+                "sss": float(sss),
+                "rainfall": float(rainfall),
+                "wind_speed": float(wind_speed),
+                "sea_level_pressure": float(sea_level_pressure),
+                "air_temperature": float(air_temperature),
+                "wind_direction": float(wind_direction),
+                "monsoon": str(monsoon),
+                "wind_dir_sin": float(np.sin(np.deg2rad(wind_direction))),
+                "wind_dir_cos": float(np.cos(np.deg2rad(wind_direction))),
+                "year_index": int(year) - START_YEAR,
+            }
+        ]
+    )
+
+    prediction = float(
+        predict_with_bundle(runtime["bundles"][station_id], row)[0]
+    )
+
+    return {
+        "status": "success",
+        "mode": "custom",
+        "province": province_name,
+        "year": int(year),
+        "month": int(month),
+        "month_name": MONTH_NAMES_TH.get(month, str(month)),
+        "ton": round(prediction, 6),
+        "sst": round(float(sst), 6),
+        "chlor_a": round(float(chlor_a), 6),
+        "sss": round(float(sss), 6),
+        "sss_used": bool(runtime["configs"][station_id].get("use_sss", True)),
+        "sss_source": "manual_input",
+        "rainfall": round(float(rainfall), 6),
+        "wind_speed": round(float(wind_speed), 6),
+        "sea_level_pressure": round(float(sea_level_pressure), 6),
+        "monsoon": str(monsoon),
+        "air_temperature": round(float(air_temperature), 6),
+        "wind_direction": round(float(wind_direction), 6),
+        "weather_source": weather_source,
+        "actual_ton": None,
+        "graphs_generated": False,
+        "model": model_json(runtime, station_id),
+        "source_summary": runtime["source_summary"],
+    }
+
+
+# 12) แสดง Performance และรับคำสั่ง CLI
+def decode_province(value: str, use_b64: bool) -> str:
+    if not use_b64:
+        return str(value).strip()
     try:
+        decoded = base64.b64decode(value).decode("utf-8")
+    except Exception as exc:
+        raise ValueError("ไม่สามารถถอดรหัสชื่อจังหวัดได้") from exc
+    return decoded.strip()
 
-        main()
 
-    except Exception as error:
+def format_metric(value, decimals: int) -> str:
+    if value is None or (isinstance(value, float) and not np.isfinite(value)):
+        return "-"
+    return f"{float(value):.{decimals}f}"
+
+
+def print_performance_table() -> None:
+    runtime = prepare_runtime()
+    metrics_df = runtime["metrics"].copy()
+    summary = runtime["source_summary"]
+
+    metrics_path = OUTPUT_DIR / "regression_model_evaluation.csv"
+    metrics_df.to_csv(
+        metrics_path,
+        index=False,
+        encoding="utf-8-sig",
+    )
+
+    holdout_path = OUTPUT_DIR / "regression_holdout_predictions.csv"
+    runtime["holdout_predictions"].to_csv(
+        holdout_path,
+        index=False,
+        encoding="utf-8-sig",
+    )
+
+    # ========================================================
+    # ตารางที่ 1: Model Performance เดิม
+    # ========================================================
+    width = 100
+    print()
+    print("=" * width)
+    print("LINEAR REGRESSION PERFORMANCE")
+    print("=" * width)
+
+    header = (
+        f"{'Province':<22}"
+        f"{'MAE':>12}"
+        f"{'RMSE':>12}"
+        f"{'R²':>12}"
+        f"{'Alpha':>12}"
+        f"{'Weight':>12}"
+        f"{'Bias':>12}"
+    )
+
+    print(header)
+    print("-" * width)
+
+    for row in metrics_df.itertuples(index=False):
+        if str(row.province) == "OVERALL":
+            continue
+
+        print(
+            f"{str(row.province):<22}"
+            f"{format_metric(row.mae, 2):>12}"
+            f"{format_metric(row.rmse, 2):>12}"
+            f"{format_metric(row.r2, 4):>12}"
+            f"{format_metric(row.alpha, 4):>12}"
+            f"{format_metric(row.weight, 3):>12}"
+            f"{format_metric(row.bias, 2):>12}"
+        )
+
+    overall = metrics_df[
+        metrics_df["province"] == "OVERALL"
+    ].iloc[0]
+
+    print("-" * width)
+    print(
+        f"{'OVERALL':<22}"
+        f"{format_metric(overall['mae'], 2):>12}"
+        f"{format_metric(overall['rmse'], 2):>12}"
+        f"{format_metric(overall['r2'], 4):>12}"
+        f"{'-':>12}"
+        f"{'-':>12}"
+        f"{'-':>12}"
+    )
+    print("=" * width)
+
+    # ========================================================
+    # ตารางที่ 2: Normalized Error / Mean Baseline
+    # ========================================================
+    width2 = 86
+    print()
+    print("=" * width2)
+    print("NORMALIZED ERROR / MEAN BASELINE COMPARISON")
+    print("=" * width2)
+
+    header2 = (
+        f"{'Province':<22}"
+        f"{'NRMSE (%)':>14}"
+        f"{'Baseline MAE':>16}"
+        f"{'Baseline RMSE':>17}"
+        f"{'Model vs Base':>17}"
+    )
+
+    print(header2)
+    print("-" * width2)
+
+    for row in metrics_df.itertuples(index=False):
+        model_vs_base = (
+            "BETTER"
+            if float(row.rmse) < float(row.baseline_rmse)
+            else "WORSE"
+        )
+
+        print(
+            f"{str(row.province):<22}"
+            f"{format_metric(row.nrmse_percent, 2):>14}"
+            f"{format_metric(row.baseline_mae, 2):>16}"
+            f"{format_metric(row.baseline_rmse, 2):>17}"
+            f"{model_vs_base:>17}"
+        )
+
+    print("=" * width2)
+
+    print(
+        "NRMSE (%) = RMSE / Mean(Actual) × 100 | "
+        "ค่าต่ำกว่าดีกว่า"
+    )
+    print(
+        "Mean Baseline = ใช้ค่าเฉลี่ย Catch ของ Train "
+        "ของจังหวัดนั้นทำนายทุกเดือนใน Holdout"
+    )
+    print(
+        "Model vs Base = เปรียบเทียบ RMSE ของโมเดลกับ Baseline; "
+        "BETTER หมายถึง RMSE โมเดลต่ำกว่า"
+    )
+    print()
+
+    print(
+        f"Train: {START_YEAR}-{int(summary['holdout_year']) - 1} | "
+        f"Test: {int(summary['holdout_year'])} | "
+        f"Final train: {START_YEAR}-{int(summary['catch_max_year'])}"
+    )
+    print(
+        "Features: SST, Chlorophyll-a, SSS, Rainfall, Wind Speed, "
+        "Sea Level Pressure (selected), Air Temperature, Wind Direction sin/cos, "
+        "Year Index, Month One-Hot, Monsoon One-Hot (selected)"
+    )
+    print(
+        f"SSS range in database: {summary['sss_min']:.3f}-"
+        f"{summary['sss_max']:.3f} PSU | mean {summary['sss_mean']:.3f} PSU"
+    )
+    print(
+        "Weight = สัดส่วนผลจาก Linear Regression | "
+        "Bias = ค่าชดเชยจาก median residual ของ Walk-forward validation"
+    )
+    print(
+        "Recency factor: "
+        + ", ".join(
+            f"station {station_id}={factor:g}"
+            for station_id, factor
+            in VALIDATION_RECENCY_BY_STATION.items()
+        )
+    )
+    print()
+
+
+def parse_cli_and_run() -> None:
+    args = sys.argv[1:]
+
+    if not args or args == ["--performance"]:
+        print_performance_table()
+        return
+
+    use_b64 = "--b64" in args
+    args = [value for value in args if value != "--b64"]
+
+    if args and args[0] == "--custom":
+        if len(args) != 7:
+            raise ValueError(
+                "Custom usage: --custom <province> <year> <month> <sst> <chlor_a> <sss> [--b64]"
+            )
+
+        province = decode_province(args[1], use_b64)
+        year = int(args[2])
+        month = int(args[3])
+        sst = float(args[4])
+        chlor_a = float(args[5])
+        sss = float(args[6])
 
         send_json(
-            {
-                "status": "error",
-                "message": str(error),
-            }
+            predict_custom_mode(
+                province,
+                year,
+                month,
+                sst,
+                chlor_a,
+                sss,
+            )
         )
+        return
+
+    if len(args) != 3:
+        raise ValueError(
+            "Usage: <province> <year> <month> [--b64]"
+        )
+
+    province = decode_province(args[0], use_b64)
+    year = int(args[1])
+    month = int(args[2])
+
+    send_json(
+        predict_database_mode(
+            province,
+            year,
+            month,
+        )
+    )
+
+
+def main() -> None:
+    configure_stdout()
+    parse_cli_and_run()
+
+
+if __name__ == "__main__":
+    configure_stdout()
+    try:
+        main()
+    except Exception as exc:
+        # ส่ง error เป็น JSON ให้ PHP
+        if len(sys.argv) > 1 and sys.argv[1] != "--performance":
+            send_json(
+                {
+                    "status": "error",
+                    "message": str(exc),
+                }
+            )
+        else:
+            print()
+            print("=" * 72)
+            print("ไม่สามารถสร้าง LINEAR REGRESSION PERFORMANCE ได้")
+            print("=" * 72)
+            print(str(exc))
+            print()
+            print(
+                "ตรวจสอบว่า MySQL ทำงานอยู่ และฐานข้อมูล projecta มีตาราง "
+                "station, catch_mackereldata, marine_environment และ weather_data"
+            )
+            sys.exit(1)

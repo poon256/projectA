@@ -94,6 +94,17 @@
     "year",
     "station_id"
   ],
+  "model_version": "rf_683_full_depth_v1",
+  "model_parameters": {
+    "n_estimators": 300,
+    "max_depth": null,
+    "min_samples_split": 2,
+    "min_samples_leaf": 1,
+    "max_features": "sqrt",
+    "class_weight": "balanced",
+    "random_state": 42
+  },
+  "experiment_note": "ต้นแบบ 68.3%: corrected ERA5 rainfall + 7 features + Random Forest แบบ full depth; ไม่ใช้ monsoon",
   "feature_importance": {
     "sst": 0.15253996898348962,
     "chlorophyll_a": 0.1774671294455281,

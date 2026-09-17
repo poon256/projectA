@@ -42,15 +42,15 @@
 
                 <li class="nav-item">
                     <a class="nav-link"
-                       href="profile.php">
-                        Profile
+                       href="contact.php">
+                        Contact
                     </a>
                 </li>
 
                 <li class="nav-item">
                     <a class="nav-link"
-                       href="contact.php">
-                        Contact
+                       href="profile.php">
+                        Profile
                     </a>
                 </li>
 
@@ -124,22 +124,27 @@
             <!-- Dataset -->
 
             <div class="list-group-item active mt-3 section-title">
-                Dataset
+                Archive
             </div>
+
+            <a href="station.php"
+               class="list-group-item list-group-item-action">
+                Station
+            </a>
 
             <a href="dataset.php"
                class="list-group-item list-group-item-action">
                 Dataset
             </a>
 
-            <a href="sst.php"
+            <a href="environment.php"
                class="list-group-item list-group-item-action">
-                SST Data
+                Environment
             </a>
 
-            <a href="chla.php"
+            <a href="weather.php"
                class="list-group-item list-group-item-action">
-                Chl-a Data
+                Weather
             </a>
 
             <!-- AI Models -->
@@ -158,6 +163,11 @@
                 Classification
             </a>
 
+            <a href="classification2.php"
+               class="list-group-item list-group-item-action">
+                Classification2
+            </a>
+
             <a href="clustering.php"
                class="list-group-item list-group-item-action">
                 Clustering
@@ -166,17 +176,6 @@
             <a href="prediction.php"
                class="list-group-item list-group-item-action">
                 Prediction
-            </a>
-
-            <!-- Evaluation -->
-
-            <div class="list-group-item active mt-3 section-title">
-                Evaluation
-            </div>
-
-            <a href="performance.php"
-               class="list-group-item list-group-item-action">
-                Model Performance
             </a>
 
             <!-- System -->

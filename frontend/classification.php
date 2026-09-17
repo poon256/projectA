@@ -376,7 +376,7 @@ function percent($value)
         </h2>
 
         <p class="text-muted">
-            วิเคราะห์และจำแนกระดับปริมาณปลาทูเป็น LOW, MEDIUM และ HIGH ด้วยข้อมูลรายเดือน
+            Mackerel Distribution Level
         </p>
 
     </div>
@@ -405,14 +405,6 @@ function percent($value)
         </div>
 
         <div class="card-body">
-
-            <p class="info-note mb-4">
-
-                เลือกเดือน ปี และจังหวัด ระบบจะดึง SST, Chlorophyll-a, SSS,
-                Rainfall, Wind Speed, Air Temperature และ Wind Direction ตามช่วงเวลาจากฐานข้อมูล
-                พร้อมดึง Depth ประจำจุดอ้างอิงจากตาราง Station เพื่อใช้ทำนาย
-
-            </p>
 
             <form method="post">
 
@@ -542,13 +534,6 @@ function percent($value)
         </div>
 
         <div class="card-body">
-
-            <p class="info-note mb-4">
-
-                เลือกเดือน ปี และจังหวัด แล้วกรอกเฉพาะ SST, Chlorophyll-a,
-                Rainfall และ Wind Speed ซึ่งเป็นปัจจัยที่โมเดลใช้งาน
-
-            </p>
 
             <form method="post">
 
@@ -1028,10 +1013,6 @@ function percent($value)
                     (string)($metrics['test']['rows'] ?? '-')
                 ) ?>
 
-                <br>
-                ค่าประเมินทั้งหมดคำนวณจากข้อมูล Test ปี 2567 และเป็นประสิทธิภาพของโมเดลชุดเดียว
-                จึงไม่เปลี่ยนตามจังหวัด เดือน หรือปีที่เลือกทำนาย
-
             </p>
 
 
@@ -1131,11 +1112,6 @@ function percent($value)
                 Confusion Matrix
             </h5>
 
-            <p class="info-note">
-                แถวแสดงระดับจริงและคอลัมน์แสดงระดับที่โมเดลทำนาย ค่าในแนวทแยงคือจำนวนที่จำแนกถูก
-                ส่วนค่านอกแนวทแยงคือจำนวนที่โมเดลจำแนกผิดระหว่าง LOW, MEDIUM และ HIGH
-            </p>
-
             <?php
             $cm = $metrics['confusion_matrix']['matrix'] ?? [];
             $cmLabels = $metrics['confusion_matrix']['labels']
@@ -1208,11 +1184,6 @@ function percent($value)
                 <h5 class="form-section-title mt-4">
                     Feature Importance
                 </h5>
-
-                <p class="info-note">
-                    แสดงสัดส่วนความสำคัญที่ Random Forest ใช้ในการตัดสินใจ ค่าสูงหมายถึงโมเดลใช้ตัวแปรนั้นมาก
-                    แต่ไม่ได้ยืนยันว่าตัวแปรนั้นเป็นสาเหตุโดยตรงของปริมาณปลาทู
-                </p>
 
                 <div class="table-responsive">
 
@@ -1349,10 +1320,6 @@ function percent($value)
 
         <div class="card-body">
 
-            <p class="info-note">
-                โมเดล Random Forest Classifier สำหรับจำแนกปริมาณปลาทูเป็นระดับ LOW, MEDIUM และ HIGH
-                จากข้อมูลการขึ้นท่า ปัจจัยทางทะเล สภาพอากาศ เวลา และจังหวัด
-            </p>
 
             <div class="row">
                 <div class="col-md-6 mb-3">
@@ -1379,7 +1346,7 @@ function percent($value)
             <div class="alert alert-light border mt-3 mb-0">
                 <strong>Prediction modes:</strong>
                 Database Parameters ดึงค่าทั้งหมดจากฐานข้อมูลตามเดือน ปี และจังหวัด ส่วน Manual Parameters
-                ให้ผู้ใช้กรอก SST, Chlorophyll-a, Rainfall และ Wind Speed เอง ส่วน Station ID ดึงจากจังหวัดที่เลือก
+                ให้ผู้ใช้กรอกเอง
             </div>
 
         </div>
@@ -1388,9 +1355,7 @@ function percent($value)
 
 </div>
 
-
 <?php include 'footer.php'; ?>
-
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js">
 </script>

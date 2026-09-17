@@ -1,0 +1,1259 @@
+{
+  "selection_rule": "select by rolling validation 2565-2566; final 2567 is untouched until selection",
+  "locked_v4_ensemble_baseline": {
+    "accuracy": 0.6333333333333333,
+    "macro_precision": 0.5797720797720798,
+    "macro_recall": 0.5637095981923568,
+    "macro_f1": 0.5674199298487723,
+    "threshold_low": 8.0,
+    "threshold_high": 37.920000000000016,
+    "train_rows": 263,
+    "eval_rows": 60,
+    "confusion_matrix": [
+      [
+        8,
+        10,
+        0
+      ],
+      [
+        7,
+        5,
+        1
+      ],
+      [
+        1,
+        3,
+        25
+      ]
+    ],
+    "train_class_counts": {
+      "LOW": 96,
+      "MEDIUM": 77,
+      "HIGH": 90
+    },
+    "eval_class_counts": {
+      "LOW": 18,
+      "MEDIUM": 13,
+      "HIGH": 29
+    }
+  },
+  "candidate_count": 240,
+  "random_forest_fit_count": 1440,
+  "selected_model": {
+    "rolling_validation_rank": 1,
+    "feature_set": "CYCLIC_AND_ONEHOT",
+    "features": [
+      "sst",
+      "chlorophyll_a",
+      "rainfall",
+      "wind_speed",
+      "month_sin",
+      "month_cos",
+      "year",
+      "station_cat"
+    ],
+    "q_low": 0.34,
+    "q_high": 0.66,
+    "config_name": "FULL_BALANCED",
+    "parameters": {
+      "n_estimators": 300,
+      "max_depth": null,
+      "min_samples_split": 2,
+      "min_samples_leaf": 1,
+      "max_features": "sqrt",
+      "class_weight": "balanced"
+    },
+    "decision_name": "P_NORMAL",
+    "decision_weights": {
+      "LOW": 1.0,
+      "MEDIUM": 1.0,
+      "HIGH": 1.0
+    },
+    "seeds": [
+      21,
+      42,
+      84
+    ],
+    "rolling_mean_accuracy": 0.6068181818181818,
+    "rolling_min_accuracy": 0.5636363636363636,
+    "rolling_mean_macro_f1": 0.5239809603570332,
+    "accuracy_2565": 0.5636363636363636,
+    "accuracy_2566": 0.65,
+    "accuracy": 0.65,
+    "macro_precision": 0.6043813236795693,
+    "macro_recall": 0.5893506238333824,
+    "macro_f1": 0.5892857142857143,
+    "threshold_low": 8.0,
+    "threshold_high": 37.920000000000016,
+    "train_rows": 263,
+    "eval_rows": 60,
+    "confusion_matrix": [
+      [
+        8,
+        10,
+        0
+      ],
+      [
+        5,
+        6,
+        2
+      ],
+      [
+        1,
+        3,
+        25
+      ]
+    ],
+    "train_class_counts": {
+      "LOW": 96,
+      "MEDIUM": 77,
+      "HIGH": 90
+    },
+    "eval_class_counts": {
+      "LOW": 18,
+      "MEDIUM": 13,
+      "HIGH": 29
+    }
+  },
+  "final_candidates": [
+    {
+      "rolling_validation_rank": 1,
+      "feature_set": "CYCLIC_AND_ONEHOT",
+      "features": [
+        "sst",
+        "chlorophyll_a",
+        "rainfall",
+        "wind_speed",
+        "month_sin",
+        "month_cos",
+        "year",
+        "station_cat"
+      ],
+      "q_low": 0.34,
+      "q_high": 0.66,
+      "config_name": "FULL_BALANCED",
+      "parameters": {
+        "n_estimators": 300,
+        "max_depth": null,
+        "min_samples_split": 2,
+        "min_samples_leaf": 1,
+        "max_features": "sqrt",
+        "class_weight": "balanced"
+      },
+      "decision_name": "P_NORMAL",
+      "decision_weights": {
+        "LOW": 1.0,
+        "MEDIUM": 1.0,
+        "HIGH": 1.0
+      },
+      "seeds": [
+        21,
+        42,
+        84
+      ],
+      "rolling_mean_accuracy": 0.6068181818181818,
+      "rolling_min_accuracy": 0.5636363636363636,
+      "rolling_mean_macro_f1": 0.5239809603570332,
+      "accuracy_2565": 0.5636363636363636,
+      "accuracy_2566": 0.65,
+      "accuracy": 0.65,
+      "macro_precision": 0.6043813236795693,
+      "macro_recall": 0.5893506238333824,
+      "macro_f1": 0.5892857142857143,
+      "threshold_low": 8.0,
+      "threshold_high": 37.920000000000016,
+      "train_rows": 263,
+      "eval_rows": 60,
+      "confusion_matrix": [
+        [
+          8,
+          10,
+          0
+        ],
+        [
+          5,
+          6,
+          2
+        ],
+        [
+          1,
+          3,
+          25
+        ]
+      ],
+      "train_class_counts": {
+        "LOW": 96,
+        "MEDIUM": 77,
+        "HIGH": 90
+      },
+      "eval_class_counts": {
+        "LOW": 18,
+        "MEDIUM": 13,
+        "HIGH": 29
+      }
+    },
+    {
+      "rolling_validation_rank": 2,
+      "feature_set": "CYCLIC_AND_ONEHOT",
+      "features": [
+        "sst",
+        "chlorophyll_a",
+        "rainfall",
+        "wind_speed",
+        "month_sin",
+        "month_cos",
+        "year",
+        "station_cat"
+      ],
+      "q_low": 0.34,
+      "q_high": 0.66,
+      "config_name": "FULL_BALANCED",
+      "parameters": {
+        "n_estimators": 300,
+        "max_depth": null,
+        "min_samples_split": 2,
+        "min_samples_leaf": 1,
+        "max_features": "sqrt",
+        "class_weight": "balanced"
+      },
+      "decision_name": "P_LOW_105",
+      "decision_weights": {
+        "LOW": 1.05,
+        "MEDIUM": 1.0,
+        "HIGH": 1.0
+      },
+      "seeds": [
+        21,
+        42,
+        84
+      ],
+      "rolling_mean_accuracy": 0.6068181818181818,
+      "rolling_min_accuracy": 0.5636363636363636,
+      "rolling_mean_macro_f1": 0.5239809603570332,
+      "accuracy_2565": 0.5636363636363636,
+      "accuracy_2566": 0.65,
+      "accuracy": 0.6333333333333333,
+      "macro_precision": 0.5907332433648224,
+      "macro_recall": 0.5778563709598192,
+      "macro_f1": 0.5775252525252524,
+      "threshold_low": 8.0,
+      "threshold_high": 37.920000000000016,
+      "train_rows": 263,
+      "eval_rows": 60,
+      "confusion_matrix": [
+        [
+          8,
+          10,
+          0
+        ],
+        [
+          5,
+          6,
+          2
+        ],
+        [
+          2,
+          3,
+          24
+        ]
+      ],
+      "train_class_counts": {
+        "LOW": 96,
+        "MEDIUM": 77,
+        "HIGH": 90
+      },
+      "eval_class_counts": {
+        "LOW": 18,
+        "MEDIUM": 13,
+        "HIGH": 29
+      }
+    },
+    {
+      "rolling_validation_rank": 3,
+      "feature_set": "CYCLIC_AND_ONEHOT",
+      "features": [
+        "sst",
+        "chlorophyll_a",
+        "rainfall",
+        "wind_speed",
+        "month_sin",
+        "month_cos",
+        "year",
+        "station_cat"
+      ],
+      "q_low": 0.34,
+      "q_high": 0.66,
+      "config_name": "FULL_BALANCED",
+      "parameters": {
+        "n_estimators": 300,
+        "max_depth": null,
+        "min_samples_split": 2,
+        "min_samples_leaf": 1,
+        "max_features": "sqrt",
+        "class_weight": "balanced"
+      },
+      "decision_name": "P_LOW_110",
+      "decision_weights": {
+        "LOW": 1.1,
+        "MEDIUM": 1.0,
+        "HIGH": 1.0
+      },
+      "seeds": [
+        21,
+        42,
+        84
+      ],
+      "rolling_mean_accuracy": 0.6068181818181818,
+      "rolling_min_accuracy": 0.5636363636363636,
+      "rolling_mean_macro_f1": 0.5239809603570332,
+      "accuracy_2565": 0.5636363636363636,
+      "accuracy_2566": 0.65,
+      "accuracy": 0.6333333333333333,
+      "macro_precision": 0.5907332433648224,
+      "macro_recall": 0.5778563709598192,
+      "macro_f1": 0.5775252525252524,
+      "threshold_low": 8.0,
+      "threshold_high": 37.920000000000016,
+      "train_rows": 263,
+      "eval_rows": 60,
+      "confusion_matrix": [
+        [
+          8,
+          10,
+          0
+        ],
+        [
+          5,
+          6,
+          2
+        ],
+        [
+          2,
+          3,
+          24
+        ]
+      ],
+      "train_class_counts": {
+        "LOW": 96,
+        "MEDIUM": 77,
+        "HIGH": 90
+      },
+      "eval_class_counts": {
+        "LOW": 18,
+        "MEDIUM": 13,
+        "HIGH": 29
+      }
+    },
+    {
+      "rolling_validation_rank": 4,
+      "feature_set": "MONTH_CYCLIC",
+      "features": [
+        "sst",
+        "chlorophyll_a",
+        "rainfall",
+        "wind_speed",
+        "month_sin",
+        "month_cos",
+        "year",
+        "station_id"
+      ],
+      "q_low": 0.34,
+      "q_high": 0.66,
+      "config_name": "FULL_BALANCED",
+      "parameters": {
+        "n_estimators": 300,
+        "max_depth": null,
+        "min_samples_split": 2,
+        "min_samples_leaf": 1,
+        "max_features": "sqrt",
+        "class_weight": "balanced"
+      },
+      "decision_name": "P_LOW_105",
+      "decision_weights": {
+        "LOW": 1.05,
+        "MEDIUM": 1.0,
+        "HIGH": 1.0
+      },
+      "seeds": [
+        21,
+        42,
+        84
+      ],
+      "rolling_mean_accuracy": 0.5984848484848484,
+      "rolling_min_accuracy": 0.5636363636363636,
+      "rolling_mean_macro_f1": 0.5175810708898945,
+      "accuracy_2565": 0.5636363636363636,
+      "accuracy_2566": 0.6333333333333333,
+      "accuracy": 0.6333333333333333,
+      "macro_precision": 0.5677581377378538,
+      "macro_recall": 0.5495628254248944,
+      "macro_f1": 0.5544061302681992,
+      "threshold_low": 8.0,
+      "threshold_high": 37.920000000000016,
+      "train_rows": 263,
+      "eval_rows": 60,
+      "confusion_matrix": [
+        [
+          8,
+          10,
+          0
+        ],
+        [
+          6,
+          4,
+          3
+        ],
+        [
+          0,
+          3,
+          26
+        ]
+      ],
+      "train_class_counts": {
+        "LOW": 96,
+        "MEDIUM": 77,
+        "HIGH": 90
+      },
+      "eval_class_counts": {
+        "LOW": 18,
+        "MEDIUM": 13,
+        "HIGH": 29
+      }
+    },
+    {
+      "rolling_validation_rank": 5,
+      "feature_set": "BASE_RAW",
+      "features": [
+        "sst",
+        "chlorophyll_a",
+        "rainfall",
+        "wind_speed",
+        "month",
+        "year",
+        "station_id"
+      ],
+      "q_low": 0.34,
+      "q_high": 0.66,
+      "config_name": "FULL_BALANCED",
+      "parameters": {
+        "n_estimators": 300,
+        "max_depth": null,
+        "min_samples_split": 2,
+        "min_samples_leaf": 1,
+        "max_features": "sqrt",
+        "class_weight": "balanced"
+      },
+      "decision_name": "P_NORMAL",
+      "decision_weights": {
+        "LOW": 1.0,
+        "MEDIUM": 1.0,
+        "HIGH": 1.0
+      },
+      "seeds": [
+        21,
+        42,
+        84
+      ],
+      "rolling_mean_accuracy": 0.5977272727272727,
+      "rolling_min_accuracy": 0.5454545454545454,
+      "rolling_mean_macro_f1": 0.5356104722526922,
+      "accuracy_2565": 0.5454545454545454,
+      "accuracy_2566": 0.65,
+      "accuracy": 0.6333333333333333,
+      "macro_precision": 0.5797720797720798,
+      "macro_recall": 0.5637095981923568,
+      "macro_f1": 0.5674199298487723,
+      "threshold_low": 8.0,
+      "threshold_high": 37.920000000000016,
+      "train_rows": 263,
+      "eval_rows": 60,
+      "confusion_matrix": [
+        [
+          8,
+          10,
+          0
+        ],
+        [
+          7,
+          5,
+          1
+        ],
+        [
+          1,
+          3,
+          25
+        ]
+      ],
+      "train_class_counts": {
+        "LOW": 96,
+        "MEDIUM": 77,
+        "HIGH": 90
+      },
+      "eval_class_counts": {
+        "LOW": 18,
+        "MEDIUM": 13,
+        "HIGH": 29
+      }
+    },
+    {
+      "rolling_validation_rank": 6,
+      "feature_set": "MONTH_CYCLIC",
+      "features": [
+        "sst",
+        "chlorophyll_a",
+        "rainfall",
+        "wind_speed",
+        "month_sin",
+        "month_cos",
+        "year",
+        "station_id"
+      ],
+      "q_low": 0.34,
+      "q_high": 0.66,
+      "config_name": "FULL_BALANCED",
+      "parameters": {
+        "n_estimators": 300,
+        "max_depth": null,
+        "min_samples_split": 2,
+        "min_samples_leaf": 1,
+        "max_features": "sqrt",
+        "class_weight": "balanced"
+      },
+      "decision_name": "P_MED_105",
+      "decision_weights": {
+        "LOW": 1.0,
+        "MEDIUM": 1.05,
+        "HIGH": 1.0
+      },
+      "seeds": [
+        21,
+        42,
+        84
+      ],
+      "rolling_mean_accuracy": 0.5909090909090908,
+      "rolling_min_accuracy": 0.5818181818181818,
+      "rolling_mean_macro_f1": 0.5047215856039385,
+      "accuracy_2565": 0.5818181818181818,
+      "accuracy_2566": 0.6,
+      "accuracy": 0.6666666666666666,
+      "macro_precision": 0.6199151725467514,
+      "macro_recall": 0.6008448767069456,
+      "macro_f1": 0.6011365780041501,
+      "threshold_low": 8.0,
+      "threshold_high": 37.920000000000016,
+      "train_rows": 263,
+      "eval_rows": 60,
+      "confusion_matrix": [
+        [
+          8,
+          10,
+          0
+        ],
+        [
+          5,
+          6,
+          2
+        ],
+        [
+          0,
+          3,
+          26
+        ]
+      ],
+      "train_class_counts": {
+        "LOW": 96,
+        "MEDIUM": 77,
+        "HIGH": 90
+      },
+      "eval_class_counts": {
+        "LOW": 18,
+        "MEDIUM": 13,
+        "HIGH": 29
+      }
+    },
+    {
+      "rolling_validation_rank": 7,
+      "feature_set": "MONTH_CYCLIC",
+      "features": [
+        "sst",
+        "chlorophyll_a",
+        "rainfall",
+        "wind_speed",
+        "month_sin",
+        "month_cos",
+        "year",
+        "station_id"
+      ],
+      "q_low": 0.34,
+      "q_high": 0.66,
+      "config_name": "FULL_BALANCED",
+      "parameters": {
+        "n_estimators": 300,
+        "max_depth": null,
+        "min_samples_split": 2,
+        "min_samples_leaf": 1,
+        "max_features": "sqrt",
+        "class_weight": "balanced"
+      },
+      "decision_name": "P_LOW_105_MED_105",
+      "decision_weights": {
+        "LOW": 1.05,
+        "MEDIUM": 1.05,
+        "HIGH": 1.0
+      },
+      "seeds": [
+        21,
+        42,
+        84
+      ],
+      "rolling_mean_accuracy": 0.5901515151515151,
+      "rolling_min_accuracy": 0.5636363636363636,
+      "rolling_mean_macro_f1": 0.506675645669953,
+      "accuracy_2565": 0.5636363636363636,
+      "accuracy_2566": 0.6166666666666667,
+      "accuracy": 0.6666666666666666,
+      "macro_precision": 0.6199151725467514,
+      "macro_recall": 0.6008448767069456,
+      "macro_f1": 0.6011365780041501,
+      "threshold_low": 8.0,
+      "threshold_high": 37.920000000000016,
+      "train_rows": 263,
+      "eval_rows": 60,
+      "confusion_matrix": [
+        [
+          8,
+          10,
+          0
+        ],
+        [
+          5,
+          6,
+          2
+        ],
+        [
+          0,
+          3,
+          26
+        ]
+      ],
+      "train_class_counts": {
+        "LOW": 96,
+        "MEDIUM": 77,
+        "HIGH": 90
+      },
+      "eval_class_counts": {
+        "LOW": 18,
+        "MEDIUM": 13,
+        "HIGH": 29
+      }
+    },
+    {
+      "rolling_validation_rank": 8,
+      "feature_set": "MONTH_CYCLIC",
+      "features": [
+        "sst",
+        "chlorophyll_a",
+        "rainfall",
+        "wind_speed",
+        "month_sin",
+        "month_cos",
+        "year",
+        "station_id"
+      ],
+      "q_low": 0.34,
+      "q_high": 0.66,
+      "config_name": "FULL_BALANCED",
+      "parameters": {
+        "n_estimators": 300,
+        "max_depth": null,
+        "min_samples_split": 2,
+        "min_samples_leaf": 1,
+        "max_features": "sqrt",
+        "class_weight": "balanced"
+      },
+      "decision_name": "P_NORMAL",
+      "decision_weights": {
+        "LOW": 1.0,
+        "MEDIUM": 1.0,
+        "HIGH": 1.0
+      },
+      "seeds": [
+        21,
+        42,
+        84
+      ],
+      "rolling_mean_accuracy": 0.5901515151515151,
+      "rolling_min_accuracy": 0.5636363636363636,
+      "rolling_mean_macro_f1": 0.49832076525624913,
+      "accuracy_2565": 0.5636363636363636,
+      "accuracy_2566": 0.6166666666666667,
+      "accuracy": 0.65,
+      "macro_precision": 0.5965713724334414,
+      "macro_recall": 0.57520385106592,
+      "macro_f1": 0.5784204671857619,
+      "threshold_low": 8.0,
+      "threshold_high": 37.920000000000016,
+      "train_rows": 263,
+      "eval_rows": 60,
+      "confusion_matrix": [
+        [
+          8,
+          10,
+          0
+        ],
+        [
+          5,
+          5,
+          3
+        ],
+        [
+          0,
+          3,
+          26
+        ]
+      ],
+      "train_class_counts": {
+        "LOW": 96,
+        "MEDIUM": 77,
+        "HIGH": 90
+      },
+      "eval_class_counts": {
+        "LOW": 18,
+        "MEDIUM": 13,
+        "HIGH": 29
+      }
+    },
+    {
+      "rolling_validation_rank": 9,
+      "feature_set": "BASE_RAW",
+      "features": [
+        "sst",
+        "chlorophyll_a",
+        "rainfall",
+        "wind_speed",
+        "month",
+        "year",
+        "station_id"
+      ],
+      "q_low": 0.34,
+      "q_high": 0.66,
+      "config_name": "FULL_BALANCED",
+      "parameters": {
+        "n_estimators": 300,
+        "max_depth": null,
+        "min_samples_split": 2,
+        "min_samples_leaf": 1,
+        "max_features": "sqrt",
+        "class_weight": "balanced"
+      },
+      "decision_name": "P_LOW_105",
+      "decision_weights": {
+        "LOW": 1.05,
+        "MEDIUM": 1.0,
+        "HIGH": 1.0
+      },
+      "seeds": [
+        21,
+        42,
+        84
+      ],
+      "rolling_mean_accuracy": 0.5893939393939394,
+      "rolling_min_accuracy": 0.5454545454545454,
+      "rolling_mean_macro_f1": 0.5293069113959126,
+      "accuracy_2565": 0.5454545454545454,
+      "accuracy_2566": 0.6333333333333333,
+      "accuracy": 0.6333333333333333,
+      "macro_precision": 0.5797720797720798,
+      "macro_recall": 0.5637095981923568,
+      "macro_f1": 0.5674199298487723,
+      "threshold_low": 8.0,
+      "threshold_high": 37.920000000000016,
+      "train_rows": 263,
+      "eval_rows": 60,
+      "confusion_matrix": [
+        [
+          8,
+          10,
+          0
+        ],
+        [
+          7,
+          5,
+          1
+        ],
+        [
+          1,
+          3,
+          25
+        ]
+      ],
+      "train_class_counts": {
+        "LOW": 96,
+        "MEDIUM": 77,
+        "HIGH": 90
+      },
+      "eval_class_counts": {
+        "LOW": 18,
+        "MEDIUM": 13,
+        "HIGH": 29
+      }
+    },
+    {
+      "rolling_validation_rank": 10,
+      "feature_set": "MONTH_CYCLIC",
+      "features": [
+        "sst",
+        "chlorophyll_a",
+        "rainfall",
+        "wind_speed",
+        "month_sin",
+        "month_cos",
+        "year",
+        "station_id"
+      ],
+      "q_low": 0.32,
+      "q_high": 0.65,
+      "config_name": "FULL_BALANCED",
+      "parameters": {
+        "n_estimators": 300,
+        "max_depth": null,
+        "min_samples_split": 2,
+        "min_samples_leaf": 1,
+        "max_features": "sqrt",
+        "class_weight": "balanced"
+      },
+      "decision_name": "P_NORMAL",
+      "decision_weights": {
+        "LOW": 1.0,
+        "MEDIUM": 1.0,
+        "HIGH": 1.0
+      },
+      "seeds": [
+        21,
+        42,
+        84
+      ],
+      "rolling_mean_accuracy": 0.5878787878787879,
+      "rolling_min_accuracy": 0.509090909090909,
+      "rolling_mean_macro_f1": 0.49559265638886696,
+      "accuracy_2565": 0.509090909090909,
+      "accuracy_2566": 0.6666666666666666,
+      "accuracy": 0.6833333333333333,
+      "macro_precision": 0.6220238095238095,
+      "macro_recall": 0.6224616858237547,
+      "macro_f1": 0.6219699113374835,
+      "threshold_low": 7.0,
+      "threshold_high": 35.0,
+      "train_rows": 263,
+      "eval_rows": 60,
+      "confusion_matrix": [
+        [
+          8,
+          7,
+          0
+        ],
+        [
+          7,
+          7,
+          2
+        ],
+        [
+          1,
+          2,
+          26
+        ]
+      ],
+      "train_class_counts": {
+        "LOW": 86,
+        "MEDIUM": 86,
+        "HIGH": 91
+      },
+      "eval_class_counts": {
+        "LOW": 15,
+        "MEDIUM": 16,
+        "HIGH": 29
+      }
+    },
+    {
+      "rolling_validation_rank": 11,
+      "feature_set": "MONTH_CYCLIC",
+      "features": [
+        "sst",
+        "chlorophyll_a",
+        "rainfall",
+        "wind_speed",
+        "month_sin",
+        "month_cos",
+        "year",
+        "station_id"
+      ],
+      "q_low": 0.32,
+      "q_high": 0.65,
+      "config_name": "FULL_BALANCED",
+      "parameters": {
+        "n_estimators": 300,
+        "max_depth": null,
+        "min_samples_split": 2,
+        "min_samples_leaf": 1,
+        "max_features": "sqrt",
+        "class_weight": "balanced"
+      },
+      "decision_name": "P_MED_105",
+      "decision_weights": {
+        "LOW": 1.0,
+        "MEDIUM": 1.05,
+        "HIGH": 1.0
+      },
+      "seeds": [
+        21,
+        42,
+        84
+      ],
+      "rolling_mean_accuracy": 0.5878787878787879,
+      "rolling_min_accuracy": 0.509090909090909,
+      "rolling_mean_macro_f1": 0.49559265638886696,
+      "accuracy_2565": 0.509090909090909,
+      "accuracy_2566": 0.6666666666666666,
+      "accuracy": 0.6833333333333333,
+      "macro_precision": 0.6220238095238095,
+      "macro_recall": 0.6224616858237547,
+      "macro_f1": 0.6219699113374835,
+      "threshold_low": 7.0,
+      "threshold_high": 35.0,
+      "train_rows": 263,
+      "eval_rows": 60,
+      "confusion_matrix": [
+        [
+          8,
+          7,
+          0
+        ],
+        [
+          7,
+          7,
+          2
+        ],
+        [
+          1,
+          2,
+          26
+        ]
+      ],
+      "train_class_counts": {
+        "LOW": 86,
+        "MEDIUM": 86,
+        "HIGH": 91
+      },
+      "eval_class_counts": {
+        "LOW": 15,
+        "MEDIUM": 16,
+        "HIGH": 29
+      }
+    },
+    {
+      "rolling_validation_rank": 12,
+      "feature_set": "BASE_RAW",
+      "features": [
+        "sst",
+        "chlorophyll_a",
+        "rainfall",
+        "wind_speed",
+        "month",
+        "year",
+        "station_id"
+      ],
+      "q_low": 0.34,
+      "q_high": 0.66,
+      "config_name": "FULL_BALANCED",
+      "parameters": {
+        "n_estimators": 300,
+        "max_depth": null,
+        "min_samples_split": 2,
+        "min_samples_leaf": 1,
+        "max_features": "sqrt",
+        "class_weight": "balanced"
+      },
+      "decision_name": "P_LOW_110",
+      "decision_weights": {
+        "LOW": 1.1,
+        "MEDIUM": 1.0,
+        "HIGH": 1.0
+      },
+      "seeds": [
+        21,
+        42,
+        84
+      ],
+      "rolling_mean_accuracy": 0.581060606060606,
+      "rolling_min_accuracy": 0.5454545454545454,
+      "rolling_mean_macro_f1": 0.5230265044963106,
+      "accuracy_2565": 0.5454545454545454,
+      "accuracy_2566": 0.6166666666666667,
+      "accuracy": 0.6166666666666667,
+      "macro_precision": 0.5694553376906318,
+      "macro_recall": 0.5522153453187936,
+      "macro_f1": 0.5562041303976787,
+      "threshold_low": 8.0,
+      "threshold_high": 37.920000000000016,
+      "train_rows": 263,
+      "eval_rows": 60,
+      "confusion_matrix": [
+        [
+          8,
+          10,
+          0
+        ],
+        [
+          7,
+          5,
+          1
+        ],
+        [
+          2,
+          3,
+          24
+        ]
+      ],
+      "train_class_counts": {
+        "LOW": 96,
+        "MEDIUM": 77,
+        "HIGH": 90
+      },
+      "eval_class_counts": {
+        "LOW": 18,
+        "MEDIUM": 13,
+        "HIGH": 29
+      }
+    },
+    {
+      "rolling_validation_rank": 13,
+      "feature_set": "CYCLIC_AND_ONEHOT",
+      "features": [
+        "sst",
+        "chlorophyll_a",
+        "rainfall",
+        "wind_speed",
+        "month_sin",
+        "month_cos",
+        "year",
+        "station_cat"
+      ],
+      "q_low": 0.34,
+      "q_high": 0.66,
+      "config_name": "FULL_BALANCED",
+      "parameters": {
+        "n_estimators": 300,
+        "max_depth": null,
+        "min_samples_split": 2,
+        "min_samples_leaf": 1,
+        "max_features": "sqrt",
+        "class_weight": "balanced"
+      },
+      "decision_name": "P_MED_105",
+      "decision_weights": {
+        "LOW": 1.0,
+        "MEDIUM": 1.05,
+        "HIGH": 1.0
+      },
+      "seeds": [
+        21,
+        42,
+        84
+      ],
+      "rolling_mean_accuracy": 0.581060606060606,
+      "rolling_min_accuracy": 0.5454545454545454,
+      "rolling_mean_macro_f1": 0.5167008151580381,
+      "accuracy_2565": 0.5454545454545454,
+      "accuracy_2566": 0.6166666666666667,
+      "accuracy": 0.65,
+      "macro_precision": 0.6043813236795693,
+      "macro_recall": 0.5893506238333824,
+      "macro_f1": 0.5892857142857143,
+      "threshold_low": 8.0,
+      "threshold_high": 37.920000000000016,
+      "train_rows": 263,
+      "eval_rows": 60,
+      "confusion_matrix": [
+        [
+          8,
+          10,
+          0
+        ],
+        [
+          5,
+          6,
+          2
+        ],
+        [
+          1,
+          3,
+          25
+        ]
+      ],
+      "train_class_counts": {
+        "LOW": 96,
+        "MEDIUM": 77,
+        "HIGH": 90
+      },
+      "eval_class_counts": {
+        "LOW": 18,
+        "MEDIUM": 13,
+        "HIGH": 29
+      }
+    },
+    {
+      "rolling_validation_rank": 14,
+      "feature_set": "MONTH_CYCLIC",
+      "features": [
+        "sst",
+        "chlorophyll_a",
+        "rainfall",
+        "wind_speed",
+        "month_sin",
+        "month_cos",
+        "year",
+        "station_id"
+      ],
+      "q_low": 0.33,
+      "q_high": 0.66,
+      "config_name": "FULL_BALANCED",
+      "parameters": {
+        "n_estimators": 300,
+        "max_depth": null,
+        "min_samples_split": 2,
+        "min_samples_leaf": 1,
+        "max_features": "sqrt",
+        "class_weight": "balanced"
+      },
+      "decision_name": "P_LOW_105",
+      "decision_weights": {
+        "LOW": 1.05,
+        "MEDIUM": 1.0,
+        "HIGH": 1.0
+      },
+      "seeds": [
+        21,
+        42,
+        84
+      ],
+      "rolling_mean_accuracy": 0.5803030303030303,
+      "rolling_min_accuracy": 0.5272727272727272,
+      "rolling_mean_macro_f1": 0.5001900221116639,
+      "accuracy_2565": 0.5272727272727272,
+      "accuracy_2566": 0.6333333333333333,
+      "accuracy": 0.6333333333333333,
+      "macro_precision": 0.5677581377378538,
+      "macro_recall": 0.5495628254248944,
+      "macro_f1": 0.5544061302681992,
+      "threshold_low": 8.0,
+      "threshold_high": 37.920000000000016,
+      "train_rows": 263,
+      "eval_rows": 60,
+      "confusion_matrix": [
+        [
+          8,
+          10,
+          0
+        ],
+        [
+          6,
+          4,
+          3
+        ],
+        [
+          0,
+          3,
+          26
+        ]
+      ],
+      "train_class_counts": {
+        "LOW": 96,
+        "MEDIUM": 77,
+        "HIGH": 90
+      },
+      "eval_class_counts": {
+        "LOW": 18,
+        "MEDIUM": 13,
+        "HIGH": 29
+      }
+    },
+    {
+      "rolling_validation_rank": 15,
+      "feature_set": "MONTH_CYCLIC",
+      "features": [
+        "sst",
+        "chlorophyll_a",
+        "rainfall",
+        "wind_speed",
+        "month_sin",
+        "month_cos",
+        "year",
+        "station_id"
+      ],
+      "q_low": 0.32,
+      "q_high": 0.65,
+      "config_name": "FULL_BALANCED",
+      "parameters": {
+        "n_estimators": 300,
+        "max_depth": null,
+        "min_samples_split": 2,
+        "min_samples_leaf": 1,
+        "max_features": "sqrt",
+        "class_weight": "balanced"
+      },
+      "decision_name": "P_LOW_105_MED_105",
+      "decision_weights": {
+        "LOW": 1.05,
+        "MEDIUM": 1.05,
+        "HIGH": 1.0
+      },
+      "seeds": [
+        21,
+        42,
+        84
+      ],
+      "rolling_mean_accuracy": 0.5803030303030303,
+      "rolling_min_accuracy": 0.5272727272727272,
+      "rolling_mean_macro_f1": 0.49661024420400757,
+      "accuracy_2565": 0.5272727272727272,
+      "accuracy_2566": 0.6333333333333333,
+      "accuracy": 0.6833333333333333,
+      "macro_precision": 0.6220238095238095,
+      "macro_recall": 0.6224616858237547,
+      "macro_f1": 0.6219699113374835,
+      "threshold_low": 7.0,
+      "threshold_high": 35.0,
+      "train_rows": 263,
+      "eval_rows": 60,
+      "confusion_matrix": [
+        [
+          8,
+          7,
+          0
+        ],
+        [
+          7,
+          7,
+          2
+        ],
+        [
+          1,
+          2,
+          26
+        ]
+      ],
+      "train_class_counts": {
+        "LOW": 86,
+        "MEDIUM": 86,
+        "HIGH": 91
+      },
+      "eval_class_counts": {
+        "LOW": 15,
+        "MEDIUM": 16,
+        "HIGH": 29
+      }
+    }
+  ],
+  "final_errors": [],
+  "elapsed_seconds": 1295.43
+}

@@ -14,13 +14,13 @@ $recordsPerPage = 50;
    รับค่าจากตัวกรอง
 ===================================== */
 $search = isset($_GET['search']) ? trim($_GET['search']) : '';
-$statusFilter = isset($_GET['status_filter']) ? trim($_GET['status_filter']) : 'all';
+$metric = isset($_GET['metric']) ? trim($_GET['metric']) : 'both';
 $stationId = isset($_GET['station_id']) ? (int) $_GET['station_id'] : 0;
 $year = isset($_GET['year']) ? (int) $_GET['year'] : 0;
 $month = isset($_GET['month']) ? (int) $_GET['month'] : 0;
 
-if (!in_array($statusFilter, ['all', 'active', 'inactive'], true)) {
-    $statusFilter = 'all';
+if (!in_array($metric, ['both', 'sst', 'chlorophyll_a', 'sss'], true)) {
+    $metric = 'both';
 }
 
 $currentPage = isset($_GET['page']) ? (int) $_GET['page'] : 1;
@@ -34,12 +34,16 @@ $totalRecords = 0;
 $totalStations = 0;
 $minimumYear = null;
 $maximumYear = null;
-$totalPages = 1;
 
-$avgAmount = null;
-$minAmount = null;
-$maxAmount = null;
-$totalAmount = null;
+$avgSst = null;
+$minSst = null;
+$maxSst = null;
+$avgChl = null;
+$minChl = null;
+$maxChl = null;
+$avgSss = null;
+$minSss = null;
+$maxSss = null;
 
 $stations = [];
 $years = [];
@@ -90,55 +94,48 @@ try {
 
     $yearStatement = $conn->query("
         SELECT DISTINCT year
-        FROM catch_mackereldata
+        FROM marine_environment
         ORDER BY year DESC
     ");
     $years = $yearStatement->fetchAll(PDO::FETCH_COLUMN);
 
     /* =====================================
-       เงื่อนไขค้นหา / ตัวกรอง
+       เงื่อนไขค้นหา
     ===================================== */
-    $where = ['1 = 1'];
+    $where = ["me.status = 1"];
     $parameters = [];
 
-    if ($statusFilter === 'active') {
-        $where[] = 'cmd.status = 1';
-    } elseif ($statusFilter === 'inactive') {
-        $where[] = 'cmd.status = 0';
-    }
-
     if ($stationId > 0) {
-        $where[] = 'cmd.station_id = :station_id';
+        $where[] = "me.station_id = :station_id";
         $parameters[':station_id'] = $stationId;
     }
 
     if ($year > 0) {
-        $where[] = 'cmd.year = :year';
+        $where[] = "me.year = :year";
         $parameters[':year'] = $year;
     }
 
     if ($month >= 1 && $month <= 12) {
-        $where[] = 'cmd.month = :month';
+        $where[] = "me.month = :month";
         $parameters[':month'] = $month;
     }
 
     if ($search !== '') {
-        $normalizedSearch = mb_strtolower(trim($search), 'UTF-8');
+        $normalizedSearch = mb_strtolower($search, 'UTF-8');
         $searchedMonth = $monthSearchMap[$normalizedSearch] ?? null;
 
         if ($searchedMonth !== null) {
-            $where[] = 'cmd.month = :searched_month';
+            $where[] = "me.month = :searched_month";
             $parameters[':searched_month'] = $searchedMonth;
         } else {
             $where[] = "(
-                CAST(cmd.id AS CHAR) LIKE :search
+                CAST(me.id AS CHAR) LIKE :search
                 OR s.station_name LIKE :search
-                OR CAST(cmd.year AS CHAR) LIKE :search
-                OR CAST(cmd.month AS CHAR) LIKE :search
-                OR CAST(cmd.amount AS CHAR) LIKE :search
-                OR cmd.unit LIKE :search
-                OR e.name LIKE :search
-                OR CAST(cmd.status AS CHAR) LIKE :search
+                OR CAST(me.year AS CHAR) LIKE :search
+                OR CAST(me.month AS CHAR) LIKE :search
+                OR CAST(me.sst AS CHAR) LIKE :search
+                OR CAST(me.chlorophyll_a AS CHAR) LIKE :search
+                OR CAST(me.sss AS CHAR) LIKE :search
             )";
             $parameters[':search'] = '%' . $search . '%';
         }
@@ -151,9 +148,8 @@ try {
     ===================================== */
     $countSql = "
         SELECT COUNT(*) AS total_records
-        FROM catch_mackereldata AS cmd
-        LEFT JOIN station AS s ON s.id = cmd.station_id
-        LEFT JOIN equipment AS e ON e.id = cmd.equipment_id
+        FROM marine_environment AS me
+        LEFT JOIN station AS s ON s.id = me.station_id
         $whereSql
     ";
 
@@ -178,17 +174,21 @@ try {
     }
 
     /* =====================================
-       สถิติปริมาณปลาทู
+       สถิติ SST / Chlorophyll-a
     ===================================== */
     $statsSql = "
         SELECT
-            AVG(cmd.amount) AS avg_amount,
-            MIN(cmd.amount) AS min_amount,
-            MAX(cmd.amount) AS max_amount,
-            SUM(cmd.amount) AS total_amount
-        FROM catch_mackereldata AS cmd
-        LEFT JOIN station AS s ON s.id = cmd.station_id
-        LEFT JOIN equipment AS e ON e.id = cmd.equipment_id
+            AVG(me.sst) AS avg_sst,
+            MIN(me.sst) AS min_sst,
+            MAX(me.sst) AS max_sst,
+            AVG(me.chlorophyll_a) AS avg_chl,
+            MIN(me.chlorophyll_a) AS min_chl,
+            MAX(me.chlorophyll_a) AS max_chl,
+            AVG(me.sss) AS avg_sss,
+            MIN(me.sss) AS min_sss,
+            MAX(me.sss) AS max_sss
+        FROM marine_environment AS me
+        LEFT JOIN station AS s ON s.id = me.station_id
         $whereSql
     ";
 
@@ -204,19 +204,25 @@ try {
 
     $stats = $statsStatement->fetch(PDO::FETCH_ASSOC);
 
-    $avgAmount = $stats['avg_amount'] !== null ? (float) $stats['avg_amount'] : null;
-    $minAmount = $stats['min_amount'] !== null ? (float) $stats['min_amount'] : null;
-    $maxAmount = $stats['max_amount'] !== null ? (float) $stats['max_amount'] : null;
-    $totalAmount = $stats['total_amount'] !== null ? (float) $stats['total_amount'] : null;
+    $avgSst = $stats['avg_sst'] !== null ? (float) $stats['avg_sst'] : null;
+    $minSst = $stats['min_sst'] !== null ? (float) $stats['min_sst'] : null;
+    $maxSst = $stats['max_sst'] !== null ? (float) $stats['max_sst'] : null;
+
+    $avgChl = $stats['avg_chl'] !== null ? (float) $stats['avg_chl'] : null;
+    $minChl = $stats['min_chl'] !== null ? (float) $stats['min_chl'] : null;
+    $maxChl = $stats['max_chl'] !== null ? (float) $stats['max_chl'] : null;
+
+    $avgSss = $stats['avg_sss'] !== null ? (float) $stats['avg_sss'] : null;
+    $minSss = $stats['min_sss'] !== null ? (float) $stats['min_sss'] : null;
+    $maxSss = $stats['max_sss'] !== null ? (float) $stats['max_sss'] : null;
 
     /* =====================================
-       จำนวนจังหวัดตามผลลัพธ์
+       จำนวนจังหวัดที่มีข้อมูล
     ===================================== */
     $stationCountSql = "
-        SELECT COUNT(DISTINCT cmd.station_id) AS total_stations
-        FROM catch_mackereldata AS cmd
-        LEFT JOIN station AS s ON s.id = cmd.station_id
-        LEFT JOIN equipment AS e ON e.id = cmd.equipment_id
+        SELECT COUNT(DISTINCT me.station_id) AS total_stations
+        FROM marine_environment AS me
+        LEFT JOIN station AS s ON s.id = me.station_id
         $whereSql
     ";
 
@@ -234,15 +240,12 @@ try {
     $totalStations = (int) ($stationCountResult['total_stations'] ?? 0);
 
     /* =====================================
-       ช่วงปีตามผลลัพธ์
+       ช่วงปีของผลลัพธ์
     ===================================== */
     $yearRangeSql = "
-        SELECT
-            MIN(cmd.year) AS minimum_year,
-            MAX(cmd.year) AS maximum_year
-        FROM catch_mackereldata AS cmd
-        LEFT JOIN station AS s ON s.id = cmd.station_id
-        LEFT JOIN equipment AS e ON e.id = cmd.equipment_id
+        SELECT MIN(me.year) AS minimum_year, MAX(me.year) AS maximum_year
+        FROM marine_environment AS me
+        LEFT JOIN station AS s ON s.id = me.station_id
         $whereSql
     ";
 
@@ -268,20 +271,19 @@ try {
     ===================================== */
     $dataSql = "
         SELECT
-            cmd.id,
-            cmd.station_id,
-            s.station_name AS province,
-            cmd.year,
-            cmd.month,
-            cmd.amount,
-            cmd.unit,
-            e.name AS equipment_name,
-            cmd.status
-        FROM catch_mackereldata AS cmd
-        LEFT JOIN station AS s ON s.id = cmd.station_id
-        LEFT JOIN equipment AS e ON e.id = cmd.equipment_id
+            me.id,
+            me.station_id,
+            s.station_name,
+            me.sst,
+            me.chlorophyll_a,
+            me.sss,
+            me.year,
+            me.month,
+            me.status
+        FROM marine_environment AS me
+        LEFT JOIN station AS s ON s.id = me.station_id
         $whereSql
-        ORDER BY cmd.id ASC
+        ORDER BY me.id ASC
         LIMIT :records_per_page
         OFFSET :record_offset
     ";
@@ -324,14 +326,14 @@ try {
 function buildPageUrl(
     int $page,
     string $search,
-    string $statusFilter,
+    string $metric,
     int $stationId,
     int $year,
     int $month
 ): string {
     return '?' . http_build_query([
         'search' => $search,
-        'status_filter' => $statusFilter,
+        'metric' => $metric,
         'station_id' => $stationId,
         'year' => $year,
         'month' => $month,
@@ -351,7 +353,7 @@ function buildPageUrl(
         content="width=device-width, initial-scale=1.0"
     >
 
-    <title>Mackerel Dataset | ARCHRIVE</title>
+    <title>Marine Environment | ARCHRIVE</title>
 
     <link rel="icon" type="image/png" href="../img/logo.png">
     
@@ -391,15 +393,19 @@ function buildPageUrl(
         }
 
         .metric-tabs .btn {
-            min-width: 110px;
+            min-width: 130px;
         }
 
-        .dataset-table th,
-        .dataset-table td {
+        .env-table th,
+        .env-table td {
             white-space: nowrap;
         }
 
-        .value-amount {
+        .value-sst {
+            font-weight: 600;
+        }
+
+        .value-chl {
             font-weight: 600;
         }
     </style>
@@ -414,11 +420,11 @@ function buildPageUrl(
     <!-- Header -->
     <div class="mb-4">
         <h2 class="page-title mb-1">
-            ข้อมูลจำนวนปลาทู
+            ข้อมูลสภาพแวดล้อมทางทะเล
         </h2>
 
         <p class="text-muted mb-0">
-            แสดงข้อมูลปริมาณการจับปลาทู จำแนกตามจังหวัด ปี เดือน และเครื่องมือประมง
+            แสดงข้อมูล Sea Surface Temperature (SST), Chlorophyll-a และ Sea Surface Salinity (SSS)
         </p>
     </div>
 
@@ -434,25 +440,10 @@ function buildPageUrl(
                         <?= number_format($totalRecords) ?>
                     </div>
 
-                    <div class="metric-sub text-muted">รายการตามตัวกรองที่เลือก</div>
-                </div>
-            </div>
-        </div>
-
-        <div class="col-md-3 mb-3">
-            <div class="card metric-card shadow-sm h-100">
-                <div class="card-body text-center">
-                    <h6 class="text-muted">จังหวัดที่มีข้อมูล</h6>
-
-                    <div class="metric-value text-primary">
-                        <?= number_format($totalStations) ?>
-                    </div>
-
                     <div class="metric-sub text-muted">
+                        <?= number_format($totalStations) ?> จังหวัด
                         <?php if ($minimumYear !== null): ?>
-                            ช่วงปี <?= $minimumYear ?> - <?= $maximumYear ?>
-                        <?php else: ?>
-                            ไม่พบช่วงปีของข้อมูล
+                            · <?= $minimumYear ?> - <?= $maximumYear ?>
                         <?php endif; ?>
                     </div>
                 </div>
@@ -462,19 +453,17 @@ function buildPageUrl(
         <div class="col-md-3 mb-3">
             <div class="card metric-card shadow-sm h-100">
                 <div class="card-body text-center">
-                    <h6 class="text-muted">ปริมาณเฉลี่ย</h6>
+                    <h6 class="text-muted">SST เฉลี่ย</h6>
 
                     <div class="metric-value text-primary">
-                        <?= $avgAmount !== null
-                            ? number_format($avgAmount, 2) . ' ตัน'
-                            : '-' ?>
+                        <?= $avgSst !== null ? number_format($avgSst, 2) . ' °C' : '-' ?>
                     </div>
 
                     <div class="metric-sub text-muted">
                         Min:
-                        <?= $minAmount !== null ? number_format($minAmount, 2) . ' ตัน' : '-' ?>
+                        <?= $minSst !== null ? number_format($minSst, 2) . ' °C' : '-' ?>
                         · Max:
-                        <?= $maxAmount !== null ? number_format($maxAmount, 2) . ' ตัน' : '-' ?>
+                        <?= $maxSst !== null ? number_format($maxSst, 2) . ' °C' : '-' ?>
                     </div>
                 </div>
             </div>
@@ -483,16 +472,32 @@ function buildPageUrl(
         <div class="col-md-3 mb-3">
             <div class="card metric-card shadow-sm h-100">
                 <div class="card-body text-center">
-                    <h6 class="text-muted">ปริมาณรวม</h6>
+                    <h6 class="text-muted">Chlorophyll-a เฉลี่ย</h6>
 
                     <div class="metric-value text-primary">
-                        <?= $totalAmount !== null
-                            ? number_format($totalAmount, 2) . ' ตัน'
-                            : '-' ?>
+                        <?= $avgChl !== null ? number_format($avgChl, 2) : '-' ?>
                     </div>
 
                     <div class="metric-sub text-muted">
-                        คำนวณจากข้อมูลตามตัวกรองที่เลือก
+                        Min:
+                        <?= $minChl !== null ? number_format($minChl, 2) : '-' ?>
+                        · Max:
+                        <?= $maxChl !== null ? number_format($maxChl, 2) : '-' ?>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-md-3 mb-3">
+            <div class="card metric-card shadow-sm h-100">
+                <div class="card-body text-center">
+                    <h6 class="text-muted">SSS เฉลี่ย</h6>
+                    <div class="metric-value text-primary">
+                        <?= $avgSss !== null ? number_format($avgSss, 2) . ' PSU' : '-' ?>
+                    </div>
+                    <div class="metric-sub text-muted">
+                        Min: <?= $minSss !== null ? number_format($minSss, 2) . ' PSU' : '-' ?>
+                        · Max: <?= $maxSss !== null ? number_format($maxSss, 2) . ' PSU' : '-' ?>
                     </div>
                 </div>
             </div>
@@ -510,57 +515,67 @@ function buildPageUrl(
     <div class="card shadow-sm border-0 mb-4">
         <div class="card-body">
 
-            <form method="get" action="dataset.php">
+            <form method="get" action="environment.php">
 
                 <div class="mb-3">
                     <div class="filter-label">
-                        เลือกสถานะข้อมูล
+                        เลือกข้อมูลที่ต้องการแสดง
                     </div>
 
                     <div class="btn-group metric-tabs flex-wrap" role="group">
-
                         <input
                             type="radio"
                             class="btn-check"
-                            name="status_filter"
-                            id="statusAll"
-                            value="all"
-                            <?= $statusFilter === 'all' ? 'checked' : '' ?>
+                            name="metric"
+                            id="metricBoth"
+                            value="both"
+                            <?= $metric === 'both' ? 'checked' : '' ?>
                         >
-                        <label class="btn btn-outline-primary" for="statusAll">
+                        <label class="btn btn-outline-primary" for="metricBoth">
                             ทั้งหมด
                         </label>
 
                         <input
                             type="radio"
                             class="btn-check"
-                            name="status_filter"
-                            id="statusActive"
-                            value="active"
-                            <?= $statusFilter === 'active' ? 'checked' : '' ?>
+                            name="metric"
+                            id="metricSst"
+                            value="sst"
+                            <?= $metric === 'sst' ? 'checked' : '' ?>
                         >
-                        <label class="btn btn-outline-primary" for="statusActive">
-                            Active
+                        <label class="btn btn-outline-primary" for="metricSst">
+                            SST
                         </label>
 
                         <input
                             type="radio"
                             class="btn-check"
-                            name="status_filter"
-                            id="statusInactive"
-                            value="inactive"
-                            <?= $statusFilter === 'inactive' ? 'checked' : '' ?>
+                            name="metric"
+                            id="metricChl"
+                            value="chlorophyll_a"
+                            <?= $metric === 'chlorophyll_a' ? 'checked' : '' ?>
                         >
-                        <label class="btn btn-outline-primary" for="statusInactive">
-                            Inactive
+                        <label class="btn btn-outline-primary" for="metricChl">
+                            Chlorophyll-a
                         </label>
 
+                        <input
+                            type="radio"
+                            class="btn-check"
+                            name="metric"
+                            id="metricSss"
+                            value="sss"
+                            <?= $metric === 'sss' ? 'checked' : '' ?>
+                        >
+                        <label class="btn btn-outline-primary" for="metricSss">
+                            SSS
+                        </label>
                     </div>
                 </div>
 
                 <div class="row g-2">
 
-                    <div class="col-lg-3 col-md-6">
+                    <div class="col-md-3">
                         <label class="filter-label">จังหวัด</label>
 
                         <select name="station_id" class="form-select">
@@ -581,7 +596,7 @@ function buildPageUrl(
                         </select>
                     </div>
 
-                    <div class="col-lg-2 col-md-6">
+                    <div class="col-md-2">
                         <label class="filter-label">ปี</label>
 
                         <select name="year" class="form-select">
@@ -598,7 +613,7 @@ function buildPageUrl(
                         </select>
                     </div>
 
-                    <div class="col-lg-2 col-md-6">
+                    <div class="col-md-2">
                         <label class="filter-label">เดือน</label>
 
                         <select name="month" class="form-select">
@@ -615,19 +630,19 @@ function buildPageUrl(
                         </select>
                     </div>
 
-                    <div class="col-lg-3 col-md-6">
+                    <div class="col-md-3">
                         <label class="filter-label">ค้นหา</label>
 
                         <input
                             type="text"
                             name="search"
                             class="form-control"
-                            placeholder="จังหวัด, ปี, เดือน, ปริมาณ หรือเครื่องมือ..."
+                            placeholder="จังหวัด, ปี, เดือน, SST, Chl-a หรือ SSS..."
                             value="<?= htmlspecialchars($search, ENT_QUOTES, 'UTF-8') ?>"
                         >
                     </div>
 
-                    <div class="col-lg-2 col-md-12 d-flex align-items-end gap-2">
+                    <div class="col-md-2 d-flex align-items-end gap-2">
                         <button
                             type="submit"
                             class="btn btn-primary flex-fill"
@@ -636,7 +651,7 @@ function buildPageUrl(
                         </button>
 
                         <a
-                            href="dataset.php"
+                            href="environment.php"
                             class="btn btn-secondary"
                         >
                             ล้าง
@@ -657,16 +672,18 @@ function buildPageUrl(
             <div class="d-flex justify-content-between align-items-center flex-wrap mb-3">
                 <div>
                     <h5 class="mb-1">
-                        ตารางข้อมูลปริมาณปลาทู
+                        ตารางข้อมูลสภาพแวดล้อมทางทะเล
                     </h5>
 
                     <small class="text-muted">
-                        <?php if ($statusFilter === 'active'): ?>
-                            แสดงเฉพาะข้อมูล Active
-                        <?php elseif ($statusFilter === 'inactive'): ?>
-                            แสดงเฉพาะข้อมูล Inactive
+                        <?php if ($metric === 'sst'): ?>
+                            แสดงเฉพาะ SST
+                        <?php elseif ($metric === 'chlorophyll_a'): ?>
+                            แสดงเฉพาะ Chlorophyll-a
+                        <?php elseif ($metric === 'sss'): ?>
+                            แสดงเฉพาะ SSS
                         <?php else: ?>
-                            แสดงข้อมูลทุกสถานะ
+                            แสดง SST, Chlorophyll-a และ SSS
                         <?php endif; ?>
                     </small>
                 </div>
@@ -679,7 +696,7 @@ function buildPageUrl(
 
             <div class="table-responsive">
 
-                <table class="table table-striped table-hover table-bordered align-middle dataset-table">
+                <table class="table table-striped table-hover table-bordered align-middle env-table">
 
                     <thead class="table-light">
                         <tr>
@@ -687,9 +704,19 @@ function buildPageUrl(
                             <th>จังหวัด</th>
                             <th>ปี</th>
                             <th>เดือน</th>
-                            <th class="text-end">ปริมาณ</th>
-                            <th>หน่วย</th>
-                            <th>เครื่องมือประมง</th>
+
+                            <?php if ($metric === 'both' || $metric === 'sst'): ?>
+                                <th class="text-end">SST (°C)</th>
+                            <?php endif; ?>
+
+                            <?php if ($metric === 'both' || $metric === 'chlorophyll_a'): ?>
+                                <th class="text-end">Chlorophyll-a</th>
+                            <?php endif; ?>
+
+                            <?php if ($metric === 'both' || $metric === 'sss'): ?>
+                                <th class="text-end">SSS (PSU)</th>
+                            <?php endif; ?>
+
                             <th>สถานะ</th>
                         </tr>
                     </thead>
@@ -701,8 +728,8 @@ function buildPageUrl(
                         <?php foreach ($rows as $row): ?>
 
                             <?php
-                                $monthNumber = (int) $row['month'];
-                                $monthName = $monthNames[$monthNumber] ?? (string) $monthNumber;
+                            $monthNumber = (int) $row['month'];
+                            $monthName = $monthNames[$monthNumber] ?? (string) $monthNumber;
                             ?>
 
                             <tr>
@@ -713,7 +740,7 @@ function buildPageUrl(
 
                                 <td>
                                     <?= htmlspecialchars(
-                                        $row['province'] ?? '-',
+                                        $row['station_name'] ?? '-',
                                         ENT_QUOTES,
                                         'UTF-8'
                                     ) ?>
@@ -731,28 +758,29 @@ function buildPageUrl(
                                     ) ?>
                                 </td>
 
-                                <td class="text-end value-amount">
-                                    <?= number_format(
-                                        (float) $row['amount'],
-                                        2
-                                    ) ?>
-                                </td>
+                                <?php if ($metric === 'both' || $metric === 'sst'): ?>
+                                    <td class="text-end value-sst">
+                                        <?= $row['sst'] !== null
+                                            ? number_format((float) $row['sst'], 2)
+                                            : '-' ?>
+                                    </td>
+                                <?php endif; ?>
 
-                                <td>
-                                    <?= htmlspecialchars(
-                                        $row['unit'] ?? '-',
-                                        ENT_QUOTES,
-                                        'UTF-8'
-                                    ) ?>
-                                </td>
+                                <?php if ($metric === 'both' || $metric === 'chlorophyll_a'): ?>
+                                    <td class="text-end value-chl">
+                                        <?= $row['chlorophyll_a'] !== null
+                                            ? number_format((float) $row['chlorophyll_a'], 2)
+                                            : '-' ?>
+                                    </td>
+                                <?php endif; ?>
 
-                                <td>
-                                    <?= htmlspecialchars(
-                                        trim($row['equipment_name'] ?? '-'),
-                                        ENT_QUOTES,
-                                        'UTF-8'
-                                    ) ?>
-                                </td>
+                                <?php if ($metric === 'both' || $metric === 'sss'): ?>
+                                    <td class="text-end value-sss">
+                                        <?= $row['sss'] !== null
+                                            ? number_format((float) $row['sss'], 2)
+                                            : '-' ?>
+                                    </td>
+                                <?php endif; ?>
 
                                 <td>
                                     <?php if ((int) $row['status'] === 1): ?>
@@ -774,7 +802,7 @@ function buildPageUrl(
 
                         <tr>
                             <td
-                                colspan="8"
+                                colspan="<?= $metric === 'both' ? 8 : 6 ?>"
                                 class="text-center text-muted py-4"
                             >
                                 ไม่พบข้อมูล
@@ -793,11 +821,11 @@ function buildPageUrl(
             <?php if ($totalPages > 1): ?>
 
                 <?php
-                    $startPage = max(1, $currentPage - 2);
-                    $endPage = min($totalPages, $currentPage + 2);
+                $startPage = max(1, $currentPage - 2);
+                $endPage = min($totalPages, $currentPage + 2);
                 ?>
 
-                <nav class="mt-4" aria-label="Dataset pagination">
+                <nav class="mt-4" aria-label="Environment pagination">
 
                     <ul class="pagination justify-content-center flex-wrap">
 
@@ -809,7 +837,7 @@ function buildPageUrl(
                                         buildPageUrl(
                                             $currentPage - 1,
                                             $search,
-                                            $statusFilter,
+                                            $metric,
                                             $stationId,
                                             $year,
                                             $month
@@ -832,7 +860,7 @@ function buildPageUrl(
                                         buildPageUrl(
                                             1,
                                             $search,
-                                            $statusFilter,
+                                            $metric,
                                             $stationId,
                                             $year,
                                             $month
@@ -862,7 +890,7 @@ function buildPageUrl(
                                         buildPageUrl(
                                             $pageNumber,
                                             $search,
-                                            $statusFilter,
+                                            $metric,
                                             $stationId,
                                             $year,
                                             $month
@@ -892,7 +920,7 @@ function buildPageUrl(
                                         buildPageUrl(
                                             $totalPages,
                                             $search,
-                                            $statusFilter,
+                                            $metric,
                                             $stationId,
                                             $year,
                                             $month
@@ -915,7 +943,7 @@ function buildPageUrl(
                                         buildPageUrl(
                                             $currentPage + 1,
                                             $search,
-                                            $statusFilter,
+                                            $metric,
                                             $stationId,
                                             $year,
                                             $month
@@ -938,8 +966,8 @@ function buildPageUrl(
             <?php if ($totalRecords > 0): ?>
 
                 <?php
-                    $firstRecord = $offset + 1;
-                    $lastRecord = min($offset + $recordsPerPage, $totalRecords);
+                $firstRecord = $offset + 1;
+                $lastRecord = min($offset + $recordsPerPage, $totalRecords);
                 ?>
 
                 <p class="text-center text-muted mb-0">
