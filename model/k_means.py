@@ -1,3 +1,6 @@
+# -*- coding: utf-8 -*-
+
+import os
 import pandas as pd
 import mysql.connector
 
@@ -6,26 +9,44 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import silhouette_score, davies_bouldin_score
 from sklearn.decomposition import PCA
 
+import matplotlib
+matplotlib.use("Agg")
+
 import matplotlib.pyplot as plt
-import seaborn as sns
 
 from scipy.stats import f_oneway
 
 
-# Connect MySQL
+# DATABASE CONNECTION
 conn = mysql.connector.connect(
-    host="127.0.0.1",
-    port=3306,
-    user="root",
-    password="",
-    database="projecta",
-    use_pure=True
+    host=os.getenv("PROJECTA_DB_HOST", "127.0.0.1"),
+    database=os.getenv("PROJECTA_DB_NAME", "projecta"),
+    user=os.getenv("PROJECTA_DB_USER", "root"),
+    password=os.getenv("PROJECTA_DB_PASSWORD", ""),
+    port=int(os.getenv("PROJECTA_DB_PORT", "3306")),
+    charset="utf8mb4",
+    use_unicode=True,
 )
 
 
-# อ่านข้อมูลจาก dataset_ml
-# 1 แถว = station + year + month + equipment
+# OUTPUT
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+OUTPUT_DIR = os.path.join(BASE_DIR, "output")
 
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+ELBOW_GRAPH = os.path.join(
+    OUTPUT_DIR,
+    "kmeans_evaluation.png"
+)
+
+PCA_GRAPH = os.path.join(
+    OUTPUT_DIR,
+    "kmeans_pca.png"
+)
+
+
+# LOAD DATA
 sql = """
 SELECT
     station_id,
@@ -58,15 +79,12 @@ ORDER BY
 
 df = pd.read_sql(sql, conn)
 
-
-# ตรวจสอบข้อมูล
 print("\n=== ข้อมูลจาก dataset_ml ===")
 print("จำนวนข้อมูล =", len(df))
-
 print(df.head())
 
 
-# ตรวจสอบข้อมูลที่จำเป็นสำหรับ K-Means
+# CLEAN DATA
 features = [
     "sst",
     "chlorophyll_a",
@@ -79,19 +97,14 @@ df = df.dropna(
 ).copy()
 
 
-# รวมข้อมูลระดับพื้นที่และช่วงเวลา
-#
-# 1 record = station + year + month
-#
-# equipment_id ไม่ใช้ในการ Clustering
-# year และ month ไม่ใช้เป็น Feature
-# amount ไม่ใช้เป็น Feature ของ K-Means
-#
-# ใช้ค่าเฉลี่ยของข้อมูลสภาพแวดล้อม
-# จากทุก equipment ภายในพื้นที่และช่วงเวลาเดียวกัน
+# AREA-LEVEL DATA
 df_area = (
     df.groupby(
-        ["station_id", "year", "month"]
+        [
+            "station_id",
+            "year",
+            "month"
+        ]
     )
     .agg({
         "sst": "mean",
@@ -105,31 +118,25 @@ df_area = (
 
 
 print("\n=== ข้อมูลพื้นที่สำหรับ Clustering ===")
-
 print(
-    df_area.to_string(
-        index=False
-    )
+    "จำนวน Area Records =",
+    len(df_area)
 )
 
 
-# Feature สำหรับ K-Means
-#
-# ใช้ข้อมูลสภาพแวดล้อม
-# เพื่อวัดความใกล้เคียงของพื้นที่และช่วงเวลา
-features = [
-    "sst",
-    "chlorophyll_a",
-    "rainfall",
-    "sea_level_pressure"
-]
+# CHECK DATA
+if len(df_area) < 3:
+    raise RuntimeError(
+        "ข้อมูลไม่เพียงพอสำหรับทำ K-Means"
+    )
 
+
+# K-MEANS FEATURES
 X = df_area[
     features
 ].copy()
 
-
-# Standardize ข้อมูล
+# STANDARDIZATION
 scaler = StandardScaler()
 
 X_scaled = scaler.fit_transform(
@@ -137,7 +144,7 @@ X_scaled = scaler.fit_transform(
 )
 
 
-# ทดลองจำนวน Cluster K = 2 ถึง 8
+# FIND BEST K
 best_k = None
 best_score = -1
 
@@ -145,14 +152,12 @@ wcss = []
 silhouette_scores = []
 dbi_scores = []
 
-print("\n=== ทดสอบจำนวน Cluster ===")
-
-
-# จำนวนข้อมูลต้องมากกว่า K
 max_k = min(
     8,
     len(df_area) - 1
 )
+
+print("\n=== ทดสอบจำนวน Cluster ===")
 
 
 for k in range(
@@ -170,26 +175,19 @@ for k in range(
         X_scaled
     )
 
-
-    # WCSS
     wcss.append(
         kmeans_test.inertia_
     )
 
-
-    # Silhouette Score
     score = silhouette_score(
         X_scaled,
         labels
     )
 
-
-    # Davies-Bouldin Index
     dbi = davies_bouldin_score(
         X_scaled,
         labels
     )
-
 
     silhouette_scores.append(
         score
@@ -199,7 +197,6 @@ for k in range(
         dbi
     )
 
-
     print(
         f"K = {k} | "
         f"WCSS = {kmeans_test.inertia_:.2f} | "
@@ -207,34 +204,21 @@ for k in range(
         f"DBI = {dbi:.4f}"
     )
 
-
-    # เลือก K จาก Silhouette Score สูงสุด
     if score > best_score:
-
         best_score = score
-
         best_k = k
 
 
 print("\n================================")
-
-print(
-    "Best K =",
-    best_k
-)
-
+print("Best K =", best_k)
 print(
     "Best Silhouette Score =",
-    round(
-        best_score,
-        4
-    )
+    round(best_score, 4)
 )
-
 print("================================")
 
 
-# พล็อตกราฟประเมิน K-Means
+# EVALUATION GRAPH
 fig, axs = plt.subplots(
     1,
     3,
@@ -242,12 +226,9 @@ fig, axs = plt.subplots(
 )
 
 
-# 1. Elbow Method
+# Elbow
 axs[0].plot(
-    range(
-        2,
-        max_k + 1
-    ),
+    range(2, max_k + 1),
     wcss,
     marker="o"
 )
@@ -264,23 +245,18 @@ axs[0].set_ylabel(
     "WCSS (Inertia)"
 )
 
-axs[0].grid(
-    True
-)
+axs[0].grid(True)
 
 
-# 2. Silhouette Score
+# Silhouette
 axs[1].plot(
-    range(
-        2,
-        max_k + 1
-    ),
+    range(2, max_k + 1),
     silhouette_scores,
     marker="o"
 )
 
 axs[1].set_title(
-    "Silhouette Score (Higher is Better)"
+    "Silhouette Score"
 )
 
 axs[1].set_xlabel(
@@ -291,23 +267,18 @@ axs[1].set_ylabel(
     "Score"
 )
 
-axs[1].grid(
-    True
-)
+axs[1].grid(True)
 
 
-# 3. Davies-Bouldin Index
+# DBI
 axs[2].plot(
-    range(
-        2,
-        max_k + 1
-    ),
+    range(2, max_k + 1),
     dbi_scores,
     marker="o"
 )
 
 axs[2].set_title(
-    "Davies-Bouldin Index (Lower is Better)"
+    "Davies-Bouldin Index"
 )
 
 axs[2].set_xlabel(
@@ -318,17 +289,21 @@ axs[2].set_ylabel(
     "Index Value"
 )
 
-axs[2].grid(
-    True
-)
+axs[2].grid(True)
 
 
 plt.tight_layout()
 
-plt.show()
+plt.savefig(
+    ELBOW_GRAPH,
+    dpi=150,
+    bbox_inches="tight"
+)
+
+plt.close()
 
 
-# สร้าง K-Means ตัวสุดท้าย
+# FINAL K-MEANS
 kmeans = KMeans(
     n_clusters=best_k,
     random_state=42,
@@ -342,12 +317,7 @@ df_area["cluster"] = (
 )
 
 
-# เรียง Cluster ตามปริมาณจับปลาเฉลี่ย
-#
-# หมายเหตุ:
-# amount ไม่ได้ใช้เป็น Feature ของ K-Means
-# ส่วนนี้ใช้หลังจาก Clustering เพื่อเรียงหมายเลข Cluster
-# ตามปริมาณจับปลาเฉลี่ยเท่านั้น
+# SORT CLUSTER BY AMOUNT
 cluster_amount = (
     df_area
     .groupby("cluster")["amount"]
@@ -392,7 +362,6 @@ df_area["PC2"] = (
 )
 
 
-# PCA Explained Variance
 variance_ratio = (
     pca.explained_variance_ratio_
     * 100
@@ -416,39 +385,42 @@ print(
 )
 
 
-# PCA Scatter Plot
+# PCA GRAPH
 plt.figure(
     figsize=(8, 6)
 )
 
-sns.scatterplot(
-    x="PC1",
-    y="PC2",
-    hue="cluster",
-    palette="viridis",
-    data=df_area,
-    s=100,
-    alpha=0.8,
-    edgecolor="w"
-)
+for cluster in sorted(
+    df_area["cluster"].unique()
+):
+
+    subset = df_area[
+        df_area["cluster"] == cluster
+    ]
+
+    plt.scatter(
+        subset["PC1"],
+        subset["PC2"],
+        label=f"Cluster {cluster}",
+        s=80,
+        alpha=0.8
+    )
+
 
 plt.title(
     f"PCA Scatter Plot of Area Clusters (K={best_k})"
 )
 
 plt.xlabel(
-    f"Principal Component 1 "
-    f"({variance_ratio[0]:.2f}%)"
+    f"PC1 ({variance_ratio[0]:.2f}%)"
 )
 
 plt.ylabel(
-    f"Principal Component 2 "
-    f"({variance_ratio[1]:.2f}%)"
+    f"PC2 ({variance_ratio[1]:.2f}%)"
 )
 
 plt.legend(
-    title="Cluster (Sorted by Amount)",
-    loc="best"
+    title="Cluster"
 )
 
 plt.grid(
@@ -457,43 +429,21 @@ plt.grid(
     alpha=0.5
 )
 
-plt.show()
+plt.tight_layout()
 
-
-# แสดงผลการจัดกลุ่มพื้นที่
-print(
-    "\n=== ผลการจัดกลุ่มพื้นที่ ==="
+plt.savefig(
+    PCA_GRAPH,
+    dpi=150,
+    bbox_inches="tight"
 )
 
-print(
-    df_area[
-        [
-            "station_id",
-            "year",
-            "month",
-            "amount",
-            "sst",
-            "chlorophyll_a",
-            "rainfall",
-            "sea_level_pressure",
-            "cluster"
-        ]
-    ]
-    .sort_values(
-        [
-            "cluster",
-            "station_id",
-            "year",
-            "month"
-        ]
-    )
-    .to_string(
-        index=False
-    )
-)
+plt.close()
 
 
-# สรุปแต่ละ Cluster
+# =========================================================
+# CLUSTER SUMMARY
+# =========================================================
+
 print(
     "\n=== Cluster Summary ==="
 )
@@ -510,16 +460,12 @@ summary = (
     })
 )
 
-
 print(
     summary.to_string()
 )
 
 
-# One-Way ANOVA
-# ตรวจว่าข้อมูลสภาพแวดล้อมแตกต่างกัน
-# ระหว่าง Cluster หรือไม่
-
+# ANOVA
 print(
     "\n========== ANOVA Test =========="
 )
@@ -532,9 +478,6 @@ for var in features:
         for _, group
         in df_area.groupby("cluster")
     ]
-
-
-    # ANOVA ต้องมีอย่างน้อย 2 กลุ่ม
 
     if len(groups) >= 2:
 
@@ -549,9 +492,8 @@ for var in features:
         )
 
 
-# Update Cluster กลับไป dataset_ml
+# UPDATE DATABASE
 cursor = conn.cursor()
-
 
 for _, row in df_area.iterrows():
 
@@ -572,12 +514,20 @@ for _, row in df_area.iterrows():
     )
 
 
-# Commit
 conn.commit()
-
 
 print(
     "\nบันทึก Cluster กลับลง database เรียบร้อย"
+)
+
+print(
+    "Evaluation graph:",
+    ELBOW_GRAPH
+)
+
+print(
+    "PCA graph:",
+    PCA_GRAPH
 )
 
 print(
@@ -585,6 +535,6 @@ print(
 )
 
 
-# Close connection
+# CLOSE DATABASE
 cursor.close()
 conn.close()

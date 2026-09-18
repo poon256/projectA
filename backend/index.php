@@ -9,7 +9,7 @@ if (isset($_REQUEST['option']))
 }
 elseif (isset($_SESSION['uid']))
 {
-	$option = "home";
+	$option = "users";
 }
 else
 {
