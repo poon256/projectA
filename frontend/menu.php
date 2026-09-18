@@ -184,7 +184,7 @@
                 System
             </div>
 
-            <a href="../backend/index.php?option=home&task=def"
+            <a href="../backend/index.php?option=users&task=def"
                class="list-group-item list-group-item-action">
                 Backend
             </a>

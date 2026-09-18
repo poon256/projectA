@@ -182,54 +182,105 @@ class logs
 	}
 	
 	
-	function login()
-	{
-		$conn = new connect();
+function login()
+{
+    $conn = new connect();
 
-		$user = $_REQUEST['user'] ?? '';
-		$pass = $_REQUEST['pass'] ?? '';
+    $user = isset($_REQUEST['user'])
+        ? trim($_REQUEST['user'])
+        : '';
 
-		/*
-		 * ใช้ salter() เหมือนระบบเดิม
-		 */
-		$secure_pass = $conn->salter($pass);
+    $pass = isset($_REQUEST['pass'])
+        ? $_REQUEST['pass']
+        : '';
 
-		$sql = "select *
-				from `users`
-				where `user` = '".$user."'
-				and `pass` = '".$secure_pass."'
-				and `status` = '1'";
 
-		$res = $conn->query($sql);
+    /*
+     * เข้ารหัส Password
+     */
+    $secure_pass = $conn->salter($pass);
 
-		if ($cdr = $res->fetch())
-		{
-			$cc = 1;
 
-			/*
-			 * เก็บ Session ของ User
-			 */
-			$_SESSION['uid'] = $cdr['id'];
-			$_SESSION['uname'] = $cdr['name'];
+    /*
+     * Query User
+     */
+    $sql = "
+        SELECT *
+        FROM `users`
+        WHERE `user` = ?
+        AND `pass` = ?
+        AND `status` = 1
+        LIMIT 1
+    ";
 
-			/*
-			 * บันทึก Login
-			 */
-			$this->save_logs("login",$cdr['id']);
-		}
-		else
-		{
-			$cc = 0;
 
-			/*
-			 * Login ไม่สำเร็จ
-			 */
-			$this->save_logs("cannot login","0");
-		}
+    $res = $conn->query(
+        $sql,
+        array(
+            $user,
+            $secure_pass
+        )
+    );
 
-		header('location:index.php?cc=' . $cc);
-		exit();
-	}
+
+    $cdr = $res->fetch();
+
+
+    if ($cdr)
+    {
+
+        /*
+         * ป้องกัน Session Fixation
+         */
+        session_regenerate_id(true);
+
+
+        /*
+         * เก็บข้อมูล User
+         */
+        $_SESSION['uid'] = (int)$cdr['id'];
+
+        $_SESSION['uname'] = $cdr['name'];
+
+
+        /*
+         * บังคับเขียน Session ก่อน Redirect
+         */
+        session_write_close();
+
+
+        /*
+         * Login Log
+         */
+        $this->save_logs(
+            "login",
+            $cdr['id']
+        );
+
+
+        header(
+            'Location: index.php?option=users&task=def'
+        );
+
+        exit();
+
+    }
+    else
+    {
+
+        $this->save_logs(
+            "cannot login",
+            "0"
+        );
+
+
+        header(
+            'Location: index.php?option=logs&task=login_form&cc=0'
+        );
+
+        exit();
+    }
+}
 	
 	
 	function logout()
