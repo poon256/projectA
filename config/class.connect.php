@@ -4,14 +4,14 @@ class connect
 {
     function conn()
     {
-        $host = getenv('PROJECTA_DB_HOST') ?: '127.0.0.1';
-        $dbname = getenv('PROJECTA_DB_NAME') ?: 'projecta';
-        $user = getenv('PROJECTA_DB_USER') ?: 'root';
-        $pass = getenv('PROJECTA_DB_PASSWORD') ?: '';
-        $port = getenv('PROJECTA_DB_PORT') ?: '3306';
+        // Railway Environment Variables
+        $host = getenv('MYSQLHOST') ?: '127.0.0.1';
+        $dbname = getenv('MYSQLDATABASE') ?: 'projecta';
+        $user = getenv('MYSQLUSER') ?: 'root';
+        $pass = getenv('MYSQLPASSWORD') ?: '';
+        $port = getenv('MYSQLPORT') ?: '3306';
 
-        try
-        {
+        try {
             $conn = new PDO(
                 "mysql:host=$host;port=$port;dbname=$dbname;charset=utf8mb4",
                 $user,
@@ -24,14 +24,12 @@ class connect
             );
 
             return $conn;
-        }
-        catch (PDOException $e)
-        {
+
+        } catch (PDOException $e) {
             error_log("Database connection failed: " . $e->getMessage());
             die("ไม่สามารถเชื่อมต่อ Database ได้");
         }
     }
-
 
     function query($sql, $params = array())
     {
@@ -43,12 +41,10 @@ class connect
         return $res;
     }
 
-
     function counts($res)
     {
         return $res->rowCount();
     }
-
 
     function save_logs($action, $uid)
     {
@@ -56,13 +52,11 @@ class connect
                 (`action`, `uid`, `dating`)
                 VALUES (?, ?, ?)";
 
-        $this->query($sql, array(
-            $action,
-            $uid,
-            time()
-        ));
+        $this->query(
+            $sql,
+            array($action, $uid, time())
+        );
     }
-
 
     function salter($txt)
     {
@@ -72,7 +66,6 @@ class connect
             'sha256', $key . $txt . $key
         );
     }
-
 
     function query_lastid($sql, $params = array())
     {
@@ -84,20 +77,16 @@ class connect
         return $conn->lastInsertId();
     }
 
-
     function check_acl()
     {
-        if (isset($_REQUEST['option']) && $_REQUEST['option'] != '')
-        {
-            $option = $_REQUEST['option'];
-        }
-        else
-        {
-            $option = 'logs';
-        }
+        $option = (
+            isset($_REQUEST['option']) &&
+            $_REQUEST['option'] != ''
+        )
+            ? $_REQUEST['option']
+            : 'logs';
 
-        if (!isset($_SESSION['uid']))
-        {
+        if (!isset($_SESSION['uid'])) {
             return 0;
         }
 
@@ -114,20 +103,18 @@ class connect
                 AND `uig`.`status` = '1'
                 AND `uig`.`uid` = ?";
 
-        $res = $this->query($sql, array(
-            $option,
-            $uid
-        ));
+        $res = $this->query(
+            $sql,
+            array($option, $uid)
+        );
 
         $cdr = $res->fetch();
 
-        if ($cdr && $cdr['mca'] !== null)
-        {
+        if ($cdr && $cdr['mca'] !== null) {
             return (int)$cdr['mca'];
         }
 
         return 0;
     }
 }
-
 ?>
