@@ -2,21 +2,21 @@
   "success": true,
   "prediction": "HIGH",
   "prediction_th": "สูง",
-  "confidence": 0.7133333333333334,
+  "confidence": 0.8,
   "probabilities": {
-    "LOW": 0.13,
-    "MEDIUM": 0.15666666666666668,
-    "HIGH": 0.7133333333333334
+    "LOW": 0.13666666666666666,
+    "MEDIUM": 0.06333333333333334,
+    "HIGH": 0.8
   },
   "mode": "auto",
   "input": {
-    "year": 2567,
-    "month": 1,
+    "year": 2569,
+    "month": 8,
     "province": "สมุทรสงคราม",
     "station_id": 2,
-    "sst": 27.57,
-    "chlorophyll_a": 4.38,
-    "rainfall": 9.30000019,
-    "wind_speed": 15.7903223
+    "sst": 30.27,
+    "chlorophyll_a": 6.04,
+    "rainfall": 99.99999999,
+    "wind_speed": 17.56129074
   }
 }
