@@ -1,9 +1,6 @@
 <?php
-session_start();
 
-/* =========================================================
-   DATABASE
-========================================================= */
+session_start();
 
 $conn = new mysqli(
     "127.0.0.1",
@@ -13,7 +10,10 @@ $conn = new mysqli(
 );
 
 if ($conn->connect_error) {
-    die("เชื่อมต่อฐานข้อมูลไม่ได้: " . $conn->connect_error);
+    die(
+        "เชื่อมต่อฐานข้อมูลไม่ได้: "
+        . $conn->connect_error
+    );
 }
 
 $conn->set_charset("utf8mb4");
@@ -27,7 +27,7 @@ $python = "python";
 
 
 /* =========================================================
-   MONTH
+   MONTHS
 ========================================================= */
 
 $months = [
@@ -47,7 +47,7 @@ $months = [
 
 
 /* =========================================================
-   PROVINCE / STATION
+   PROVINCES
 ========================================================= */
 
 $provinces = [
@@ -60,7 +60,7 @@ $provinces = [
 
 
 /* =========================================================
-   DEFAULT
+   PARAMETERS
 ========================================================= */
 
 $selectedMonth =
@@ -79,6 +79,10 @@ $selectedProvince =
     : "สมุทรสงคราม";
 
 
+/* =========================================================
+   RESULTS
+========================================================= */
+
 $regression = null;
 $classify = null;
 $cluster = null;
@@ -95,14 +99,19 @@ $spawningDescription = "";
    GET STATION ID
 ========================================================= */
 
-function getStationId($province, $provinces)
-{
-    foreach ($provinces as $stationId => $name) {
+function getStationId(
+    $province,
+    $provinces
+) {
+
+    foreach (
+        $provinces
+        as $stationId => $name
+    ) {
 
         if ($name === $province) {
             return $stationId;
         }
-
     }
 
     return null;
@@ -119,22 +128,39 @@ function runPythonJson(
     $args
 ) {
 
-    if (!file_exists($pythonFile)) {
+    if (
+        $pythonFile === false
+        ||
+        !file_exists($pythonFile)
+    ) {
 
         throw new Exception(
-            "ไม่พบไฟล์ Python: " . $pythonFile
+            "ไม่พบไฟล์ Python: "
+            . $pythonFile
         );
-
     }
 
 
+    /*
+     * Python command
+     */
     $command =
-        escapeshellarg($python)
+        escapeshellarg(
+            $python
+        )
         . " "
-        . escapeshellarg($pythonFile);
+        .
+        escapeshellarg(
+            $pythonFile
+        );
 
 
-    foreach ($args as $arg) {
+    /*
+     * Arguments
+     */
+    foreach (
+        $args as $arg
+    ) {
 
         $command .=
             " "
@@ -142,10 +168,12 @@ function runPythonJson(
             escapeshellarg(
                 (string)$arg
             );
-
     }
 
 
+    /*
+     * stderr -> stdout
+     */
     $command .= " 2>&1";
 
 
@@ -154,6 +182,9 @@ function runPythonJson(
     $returnCode = 0;
 
 
+    /*
+     * Run Python
+     */
     exec(
         $command,
         $output,
@@ -161,6 +192,9 @@ function runPythonJson(
     );
 
 
+    /*
+     * Raw output
+     */
     $text =
         trim(
             implode(
@@ -176,7 +210,6 @@ function runPythonJson(
     /*
      * หา JSON จาก output
      */
-
     for (
         $i = count($output) - 1;
         $i >= 0;
@@ -203,8 +236,7 @@ function runPythonJson(
 
         if (
             json_last_error()
-            ===
-            JSON_ERROR_NONE
+            === JSON_ERROR_NONE
             &&
             is_array($decoded)
         ) {
@@ -212,23 +244,32 @@ function runPythonJson(
             $json = $decoded;
 
             break;
-
         }
-
     }
 
 
+    /*
+     * ไม่มี JSON
+     */
     if ($json === null) {
 
         throw new Exception(
             "Python ไม่ได้ส่ง JSON กลับมา\n\n"
+            . "Python Output:\n"
             . $text
         );
-
     }
 
 
-    if ($returnCode !== 0) {
+    /*
+     * Python error
+     */
+    if (
+        $returnCode !== 0
+        &&
+        ($json["status"] ?? "")
+        !== "success"
+    ) {
 
         throw new Exception(
             $json["message"]
@@ -237,7 +278,6 @@ function runPythonJson(
             ??
             "Python ทำงานไม่สำเร็จ"
         );
-
     }
 
 
@@ -258,7 +298,7 @@ if (
     try {
 
         /* =================================================
-           VALIDATE
+           VALIDATE MONTH
         ================================================= */
 
         if (
@@ -270,9 +310,12 @@ if (
             throw new Exception(
                 "เดือนต้องอยู่ระหว่าง 1-12"
             );
-
         }
 
+
+        /* =================================================
+           VALIDATE YEAR
+        ================================================= */
 
         if (
             $selectedYear < 2562
@@ -283,9 +326,12 @@ if (
             throw new Exception(
                 "ปีต้องอยู่ระหว่าง 2562-2569"
             );
-
         }
 
+
+        /* =================================================
+           STATION
+        ================================================= */
 
         $stationId =
             getStationId(
@@ -294,12 +340,13 @@ if (
             );
 
 
-        if ($stationId === null) {
+        if (
+            $stationId === null
+        ) {
 
             throw new Exception(
                 "ไม่พบจังหวัดที่เลือก"
             );
-
         }
 
 
@@ -309,12 +356,23 @@ if (
 
         $regressionFile =
             __DIR__
-            .
-            "/../model/Regression_Linear_4env.py";
+            . DIRECTORY_SEPARATOR
+            . ".."
+            . DIRECTORY_SEPARATOR
+            . "model"
+            . DIRECTORY_SEPARATOR
+            . "Regression_Linear.py";
 
 
-        if (file_exists($regressionFile)) {
+        if (
+            file_exists(
+                $regressionFile
+            )
+        ) {
 
+            /*
+             * จังหวัด Base64
+             */
             $provinceB64 =
                 base64_encode(
                     $selectedProvince
@@ -322,6 +380,15 @@ if (
 
 
             try {
+
+                /*
+                 * Python:
+                 *
+                 * province
+                 * year
+                 * month
+                 * --b64
+                 */
 
                 $regression =
                     runPythonJson(
@@ -336,7 +403,6 @@ if (
                             $selectedMonth,
                             "--b64"
                         ]
-
                     );
 
             }
@@ -344,13 +410,13 @@ if (
 
                 $regression = [
 
-                    "status" => "error",
+                    "status" =>
+                        "error",
 
                     "message" =>
                         $e->getMessage()
 
                 ];
-
             }
 
         }
@@ -358,13 +424,15 @@ if (
 
             $regression = [
 
-                "status" => "error",
+                "status" =>
+                    "error",
 
                 "message" =>
-                    "ไม่พบไฟล์ Regression_Linear_4env.py"
+                    "ไม่พบไฟล์ Regression_Linear.py\n"
+                    .
+                    $regressionFile
 
             ];
-
         }
 
 
@@ -374,11 +442,19 @@ if (
 
         $rfFile =
             __DIR__
-            .
-            "/../model/randomforestclassifier.py";
+            . DIRECTORY_SEPARATOR
+            . ".."
+            . DIRECTORY_SEPARATOR
+            . "model"
+            . DIRECTORY_SEPARATOR
+            . "randomforestclassifier.py";
 
 
-        if (file_exists($rfFile)) {
+        if (
+            file_exists(
+                $rfFile
+            )
+        ) {
 
             try {
 
@@ -398,7 +474,6 @@ if (
                             "--province",
                             $selectedProvince
                         ]
-
                     );
 
             }
@@ -406,13 +481,13 @@ if (
 
                 $classify = [
 
-                    "success" => false,
+                    "success" =>
+                        false,
 
                     "error" =>
                         $e->getMessage()
 
                 ];
-
             }
 
         }
@@ -420,13 +495,13 @@ if (
 
             $classify = [
 
-                "success" => false,
+                "success" =>
+                    false,
 
                 "error" =>
                     "ไม่พบไฟล์ randomforestclassifier.py"
 
             ];
-
         }
 
 
@@ -437,7 +512,9 @@ if (
         $clusterSql = "
 
             SELECT
-                ROUND(AVG(cluster)) AS cluster
+                ROUND(
+                    AVG(cluster)
+                ) AS cluster
 
             FROM dataset_ml
 
@@ -472,27 +549,18 @@ if (
                     intval(
                         $clusterRow["cluster"]
                     );
-
             }
-
         }
 
 
         /* =================================================
-           4. SPAWNING / CLOSED GULF PERIOD
+           4. SPAWNING
         ================================================= */
 
         $spawning = false;
 
         $spawningDescription = "";
 
-
-        /*
-         * ตรวจสอบตาม station_id
-         *
-         * รองรับจังหวัดที่มีมากกว่า 1 ช่วง
-         * เช่น สมุทรสาคร
-         */
 
         $spawnSql = "
 
@@ -506,14 +574,15 @@ if (
 
             FROM spawning_season
 
-            WHERE station_id = $stationId
+            WHERE
 
-              AND start_month <= $selectedMonth
+                start_month <= $selectedMonth
 
-              AND end_month >= $selectedMonth
+                AND
 
-            ORDER BY
-                start_month ASC
+                end_month >= $selectedMonth
+
+            LIMIT 1
 
         ";
 
@@ -530,48 +599,21 @@ if (
             $spawnResult->num_rows > 0
         ) {
 
+            $spawnRow =
+                $spawnResult->fetch_assoc();
+
+
             $spawning = true;
 
-            $descriptions = [];
 
-
-            while (
-                $spawnRow =
-                $spawnResult->fetch_assoc()
-            ) {
-
-                if (
-                    !empty(
-                        $spawnRow["description"]
-                    )
-                ) {
-
-                    $descriptions[] =
-                        $spawnRow["description"];
-
-                }
-
-            }
-
-
-            if (
-                count($descriptions) > 0
-            ) {
-
-                $spawningDescription =
-                    implode(
-                        " / ",
-                        $descriptions
-                    );
-
-            }
-            else {
-
-                $spawningDescription =
-                    "อยู่ในช่วงมาตรการปิดอ่าวไทยตอนบน";
-
-            }
-
+            $spawningDescription =
+                !empty(
+                    $spawnRow["description"]
+                )
+                ?
+                $spawnRow["description"]
+                :
+                "อยู่ในช่วงฤดูวางไข่ของปลาทู";
         }
 
 
@@ -595,7 +637,9 @@ if (
 
                 d.month,
 
-                SUM(d.amount) AS amount,
+                SUM(
+                    d.amount
+                ) AS amount,
 
                 ROUND(
                     AVG(d.cluster)
@@ -604,6 +648,7 @@ if (
             FROM dataset_ml d
 
             INNER JOIN station s
+
                 ON d.station_id = s.id
 
             WHERE
@@ -617,10 +662,15 @@ if (
             GROUP BY
 
                 s.station_name,
+
                 s.latitude,
+
                 s.longitude,
+
                 d.station_id,
+
                 d.year,
+
                 d.month
 
             ORDER BY
@@ -654,11 +704,8 @@ if (
 
                     $mapData[] =
                         $row;
-
                 }
-
             }
-
         }
 
     }
@@ -666,39 +713,41 @@ if (
 
         $error =
             $e->getMessage();
-
     }
-
 }
 
 
 /* =========================================================
-   REGRESSION RESULT
+   REGRESSION DISPLAY
 ========================================================= */
 
 $regressionTon = null;
 
 
+/*
+ * รับ ton โดยตรง
+ */
 if (
     is_array($regression)
     &&
-    (
-        $regression["status"]
-        ??
-        ""
-    ) === "success"
+    isset(
+        $regression["ton"]
+    )
+    &&
+    is_numeric(
+        $regression["ton"]
+    )
 ) {
 
     $regressionTon =
-        $regression["ton"]
-        ??
-        null;
-
+        floatval(
+            $regression["ton"]
+        );
 }
 
 
 /* =========================================================
-   CLASSIFICATION RESULT
+   CLASSIFICATION DISPLAY
 ========================================================= */
 
 $classLevel = null;
@@ -706,7 +755,9 @@ $classThai = null;
 $classConfidence = null;
 
 
-if (is_array($classify)) {
+if (
+    is_array($classify)
+) {
 
     $classLevel =
         $classify["prediction"]
@@ -737,11 +788,8 @@ if (is_array($classify)) {
         ) {
 
             $classConfidence *= 100;
-
         }
-
     }
-
 }
 
 
@@ -849,6 +897,11 @@ $conn->close();
 
 <div class="container page-container">
 
+
+    <!-- =====================================================
+         HEADER
+    ====================================================== -->
+
     <div class="page-header mb-4">
 
         <h2>
@@ -862,40 +915,77 @@ $conn->close();
     </div>
 
 
-    <?php if ($error !== null): ?>
+    <!-- =====================================================
+         GLOBAL ERROR
+    ====================================================== -->
 
-        <div class="alert alert-danger error-box">
+    <?php if (
+        $error !== null
+    ): ?>
+
+        <div
+            class="alert
+                   alert-danger
+                   error-box"
+        >
 
             <strong>
                 เกิดข้อผิดพลาด:
             </strong>
 
-            <?= htmlspecialchars($error) ?>
+            <?= htmlspecialchars(
+                $error
+            ) ?>
 
         </div>
 
     <?php endif; ?>
 
 
-    <div class="card shadow-sm border-0 mb-4">
+    <!-- =====================================================
+         PARAMETERS
+    ====================================================== -->
 
-        <div class="card-header">
+    <div
+        class="card
+               shadow-sm
+               border-0
+               mb-4"
+    >
+
+        <div
+            class="card-header"
+        >
+
             Prediction Parameters
+
         </div>
 
-        <div class="card-body">
 
-            <form method="post">
+        <div
+            class="card-body"
+        >
+
+            <form
+                method="post"
+            >
 
                 <div class="row">
 
+
                     <!-- MONTH -->
 
-                    <div class="col-md-4 mb-3">
+                    <div
+                        class="col-md-4
+                               mb-3"
+                    >
 
                         <label class="form-label">
+
                             Month
+
                         </label>
+
 
                         <select
                             class="form-select"
@@ -911,7 +1001,8 @@ $conn->close();
                                 <option
                                     value="<?= $num ?>"
                                     <?= (
-                                        $selectedMonth == $num
+                                        $selectedMonth
+                                        == $num
                                     )
                                     ? "selected"
                                     : ""
@@ -931,11 +1022,19 @@ $conn->close();
 
                     <!-- YEAR -->
 
-                    <div class="col-md-4 mb-3">
+                    <div
+                        class="col-md-4
+                               mb-3"
+                    >
 
-                        <label class="form-label">
+                        <label
+                            class="form-label"
+                        >
+
                             Year
+
                         </label>
+
 
                         <select
                             class="form-select"
@@ -956,7 +1055,8 @@ $conn->close();
                                 <option
                                     value="<?= $y ?>"
                                     <?= (
-                                        $selectedYear == $y
+                                        $selectedYear
+                                        == $y
                                     )
                                     ? "selected"
                                     : ""
@@ -976,11 +1076,19 @@ $conn->close();
 
                     <!-- PROVINCE -->
 
-                    <div class="col-md-4 mb-3">
+                    <div
+                        class="col-md-4
+                               mb-3"
+                    >
 
-                        <label class="form-label">
+                        <label
+                            class="form-label"
+                        >
+
                             Province
+
                         </label>
+
 
                         <select
                             class="form-select"
@@ -994,16 +1102,21 @@ $conn->close();
                             ): ?>
 
                                 <option
-                                    value="<?= htmlspecialchars($name) ?>"
+                                    value="<?= htmlspecialchars(
+                                        $name
+                                    ) ?>"
                                     <?= (
-                                        $selectedProvince === $name
+                                        $selectedProvince
+                                        === $name
                                     )
                                     ? "selected"
                                     : ""
                                     ?>
                                 >
 
-                                    <?= htmlspecialchars($name) ?>
+                                    <?= htmlspecialchars(
+                                        $name
+                                    ) ?>
 
                                 </option>
 
@@ -1033,18 +1146,24 @@ $conn->close();
     </div>
 
 
+    <!-- =====================================================
+         SPAWNING ALERT
+    ====================================================== -->
+
     <?php if (
-        isset($_POST["run_prediction"])
+        isset(
+            $_POST["run_prediction"]
+        )
     ): ?>
 
 
-        <!-- =================================================
-             SPAWNING / CLOSED GULF ALERT
-        ================================================= -->
+        <?php if (
+            $spawning
+        ): ?>
 
-        <?php if ($spawning): ?>
-
-            <div class="spawning-alert">
+            <div
+                class="spawning-alert"
+            >
 
                 ⚠️
 
@@ -1053,14 +1172,20 @@ $conn->close();
                 </strong>
 
                 เดือน
+
                 <?= htmlspecialchars(
-                    $months[$selectedMonth]
+                    $months[
+                        $selectedMonth
+                    ]
                 ) ?>
 
-                อยู่ในช่วงมาตรการปิดอ่าวไทยตอนบน
+                อยู่ในช่วงฤดูวางไข่ของปลาทู
+
 
                 <?php if (
-                    !empty($spawningDescription)
+                    !empty(
+                        $spawningDescription
+                    )
                 ): ?>
 
                     <br>
@@ -1081,54 +1206,77 @@ $conn->close();
         <?php else: ?>
 
             <div
-                class="spawning-alert spawning-normal"
+                class="
+                    spawning-alert
+                    spawning-normal
+                "
             >
 
                 ☑️
 
                 เดือน
+
                 <?= htmlspecialchars(
-                    $months[$selectedMonth]
+                    $months[
+                        $selectedMonth
+                    ]
                 ) ?>
 
-                ไม่อยู่ในช่วงมาตรการปิดอ่าวไทยตอนบน
+                ไม่อยู่ในช่วงฤดูวางไข่ของปลาทู
 
             </div>
 
         <?php endif; ?>
 
-
     <?php endif; ?>
 
 
-    <!-- =================================================
+    <!-- =====================================================
          RESULT CARDS
-    ================================================= -->
+    ====================================================== -->
 
-    <div class="row mb-4">
+    <div
+        class="row mb-4"
+    >
+
 
         <!-- REGRESSION -->
 
-        <div class="col-md-4 mb-3">
+        <div
+            class="col-md-4
+                   mb-3"
+        >
 
-            <div class="card shadow-sm result-card">
+            <div
+                class="
+                    card
+                    shadow-sm
+                    result-card
+                "
+            >
 
-                <div class="card-body">
+                <div
+                    class="card-body"
+                >
 
                     <h5>
                         Regression
                     </h5>
+
 
                     <?php if (
                         $regressionTon !== null
                     ): ?>
 
                         <div
-                            class="result-value text-primary"
+                            class="
+                                result-value
+                                text-primary
+                            "
                         >
 
                             <?= number_format(
-                                floatval($regressionTon),
+                                $regressionTon,
                                 2
                             ) ?>
 
@@ -1138,10 +1286,15 @@ $conn->close();
                             Ton
                         </small>
 
+
                     <?php else: ?>
 
-                        <div class="result-value">
+                        <div
+                            class="result-value"
+                        >
+
                             -
+
                         </div>
 
                         <small>
@@ -1159,11 +1312,22 @@ $conn->close();
 
         <!-- CLASSIFICATION -->
 
-        <div class="col-md-4 mb-3">
+        <div
+            class="col-md-4
+                   mb-3"
+        >
 
-            <div class="card shadow-sm result-card">
+            <div
+                class="
+                    card
+                    shadow-sm
+                    result-card
+                "
+            >
 
-                <div class="card-body">
+                <div
+                    class="card-body"
+                >
 
                     <h5>
                         Classification
@@ -1177,19 +1341,28 @@ $conn->close();
 
                         <?php
 
-                        if ($classLevel === "LOW") {
+                        if (
+                            $classLevel
+                            === "LOW"
+                        ) {
 
                             $badgeClass =
                                 "bg-danger";
 
                         }
-                        elseif ($classLevel === "MEDIUM") {
+                        elseif (
+                            $classLevel
+                            === "MEDIUM"
+                        ) {
 
                             $badgeClass =
                                 "bg-warning text-dark";
 
                         }
-                        elseif ($classLevel === "HIGH") {
+                        elseif (
+                            $classLevel
+                            === "HIGH"
+                        ) {
 
                             $badgeClass =
                                 "bg-success";
@@ -1206,11 +1379,13 @@ $conn->close();
 
 
                         <span
-                            class="badge
-                                   <?= $badgeClass ?>
-                                   fs-5
-                                   px-4
-                                   py-2"
+                            class="
+                                badge
+                                <?= $badgeClass ?>
+                                fs-5
+                                px-4
+                                py-2
+                            "
                         >
 
                             <?= htmlspecialchars(
@@ -1224,7 +1399,9 @@ $conn->close();
                             $classThai !== null
                         ): ?>
 
-                            <div class="mt-2">
+                            <div
+                                class="mt-2"
+                            >
 
                                 <?= htmlspecialchars(
                                     $classThai
@@ -1236,14 +1413,19 @@ $conn->close();
 
 
                         <?php if (
-                            $classConfidence !== null
+                            $classConfidence
+                            !== null
                         ): ?>
 
                             <small
-                                class="d-block mt-2"
+                                class="
+                                    d-block
+                                    mt-2
+                                "
                             >
 
                                 Confidence:
+
                                 <?= number_format(
                                     $classConfidence,
                                     1
@@ -1257,11 +1439,13 @@ $conn->close();
                     <?php else: ?>
 
                         <span
-                            class="badge
-                                   bg-secondary
-                                   fs-5
-                                   px-4
-                                   py-2"
+                            class="
+                                badge
+                                bg-secondary
+                                fs-5
+                                px-4
+                                py-2
+                            "
                         >
 
                             -
@@ -1272,7 +1456,10 @@ $conn->close();
 
 
                     <small
-                        class="d-block mt-2"
+                        class="
+                            d-block
+                            mt-2
+                        "
                     >
 
                         Density Level
@@ -1288,11 +1475,22 @@ $conn->close();
 
         <!-- K-MEANS -->
 
-        <div class="col-md-4 mb-3">
+        <div
+            class="col-md-4
+                   mb-3"
+        >
 
-            <div class="card shadow-sm result-card">
+            <div
+                class="
+                    card
+                    shadow-sm
+                    result-card
+                "
+            >
 
-                <div class="card-body">
+                <div
+                    class="card-body"
+                >
 
                     <h5>
                         Cluster
@@ -1304,9 +1502,11 @@ $conn->close();
                     ): ?>
 
                         <span
-                            class="badge
-                                   bg-primary
-                                   cluster-badge"
+                            class="
+                                badge
+                                bg-primary
+                                cluster-badge
+                            "
                         >
 
                             กลุ่มที่
@@ -1316,15 +1516,22 @@ $conn->close();
 
                     <?php else: ?>
 
-                        <div class="result-value">
+                        <div
+                            class="result-value"
+                        >
+
                             -
+
                         </div>
 
                     <?php endif; ?>
 
 
                     <small
-                        class="d-block mt-2"
+                        class="
+                            d-block
+                            mt-2
+                        "
                     >
 
                         K-Means Cluster Group
@@ -1340,36 +1547,67 @@ $conn->close();
     </div>
 
 
-    <!-- =================================================
+    <!-- =====================================================
          HEATMAP
-    ================================================= -->
+    ====================================================== -->
 
-    <div class="card shadow-sm border-0 mb-4">
+    <div
+        class="
+            card
+            shadow-sm
+            border-0
+            mb-4
+        "
+    >
 
-        <div class="card-header">
+        <div
+            class="card-header"
+        >
+
             Heatmap
+
         </div>
 
-        <div class="card-body">
 
-            <div id="prediction-map"></div>
+        <div
+            class="card-body"
+        >
+
+            <div
+                id="prediction-map"
+            ></div>
 
         </div>
 
     </div>
 
 
-    <!-- =================================================
+    <!-- =====================================================
          AI SUMMARY
-    ================================================= -->
+    ====================================================== -->
 
-    <div class="card shadow-sm border-0 mb-5">
+    <div
+        class="
+            card
+            shadow-sm
+            border-0
+            mb-5
+        "
+    >
 
-        <div class="card-header">
+        <div
+            class="card-header"
+        >
+
             AI Summary
+
         </div>
 
-        <div class="card-body">
+
+        <div
+            class="card-body"
+        >
+
 
             <?php if (
                 $regressionTon !== null
@@ -1379,28 +1617,37 @@ $conn->close();
                 $cluster !== null
             ): ?>
 
+
                 <p>
 
                     จังหวัด
 
                     <strong>
+
                         <?= htmlspecialchars(
                             $selectedProvince
                         ) ?>
+
                     </strong>
 
                     เดือน
 
                     <strong>
+
                         <?= htmlspecialchars(
-                            $months[$selectedMonth]
+                            $months[
+                                $selectedMonth
+                            ]
                         ) ?>
+
                     </strong>
 
                     ปี
 
                     <strong>
+
                         <?= $selectedYear ?>
+
                     </strong>
 
                 </p>
@@ -1420,7 +1667,7 @@ $conn->close();
                         >
 
                             <?= number_format(
-                                floatval($regressionTon),
+                                $regressionTon,
                                 2
                             ) ?>
 
@@ -1443,10 +1690,13 @@ $conn->close();
                         จัดระดับเป็น
 
                         <strong>
+
                             <?= htmlspecialchars(
                                 $classLevel
                             ) ?>
+
                         </strong>
+
 
                         <?php if (
                             $classThai !== null
@@ -1488,7 +1738,9 @@ $conn->close();
 
             <?php else: ?>
 
-                <p class="text-muted mb-0">
+                <p
+                    class="text-muted mb-0"
+                >
 
                     เลือกเดือน ปี และจังหวัด
                     จากนั้นกด Predict
@@ -1502,12 +1754,13 @@ $conn->close();
 
     </div>
 
+
 </div>
 
 
-<!-- =========================================================
-     LEAFLET MAP
-========================================================= -->
+<!-- =======================================================
+     LEAFLET
+======================================================= -->
 
 <script>
 
@@ -1533,7 +1786,8 @@ L.tileLayer(
 var mapData =
     <?= json_encode(
         $mapData,
-        JSON_UNESCAPED_UNICODE |
+        JSON_UNESCAPED_UNICODE
+        |
         JSON_UNESCAPED_SLASHES
     ) ?>;
 
@@ -1564,7 +1818,6 @@ mapData.forEach(
         ) {
 
             return;
-
         }
 
 
@@ -1583,17 +1836,23 @@ mapData.forEach(
         var radius = 6;
 
 
-        if (amount >= 100) {
+        if (
+            amount >= 100
+        ) {
 
             radius = 18;
 
         }
-        else if (amount >= 50) {
+        else if (
+            amount >= 50
+        ) {
 
             radius = 14;
 
         }
-        else if (amount >= 10) {
+        else if (
+            amount >= 10
+        ) {
 
             radius = 10;
 
@@ -1643,12 +1902,16 @@ mapData.forEach(
             "<b>Cluster :</b> "
             +
             (
-                isNaN(clusterValue)
+                isNaN(
+                    clusterValue
+                )
                 ? "N/A"
                 :
                 "กลุ่มที่ "
                 +
-                (clusterValue + 1)
+                (
+                    clusterValue + 1
+                )
             )
 
         );
@@ -1663,7 +1926,8 @@ mapData.forEach(
 
 var legend =
     L.control({
-        position: "bottomright"
+        position:
+            "bottomright"
     });
 
 
@@ -1692,11 +1956,17 @@ function() {
 
     div.innerHTML =
 
-        "<b>K-Means</b><br>" +
+        "<b>K-Means</b><br>"
+        +
 
-        "<span style='color:red;font-size:20px'>●</span> กลุ่มที่ 1<br>" +
+        "<span style='color:red;font-size:20px'>●</span> "
+        +
+        "กลุ่มที่ 1<br>"
+        +
 
-        "<span style='color:blue;font-size:20px'>●</span> กลุ่มที่ 2";
+        "<span style='color:blue;font-size:20px'>●</span> "
+        +
+        "กลุ่มที่ 2";
 
 
     return div;
@@ -1712,8 +1982,8 @@ legend.addTo(map);
 <!-- Bootstrap JS -->
 
 <script
-    src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js">
-</script>
+    src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"
+></script>
 
 
 <?php include 'footer.php'; ?>
