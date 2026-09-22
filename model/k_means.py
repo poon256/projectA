@@ -456,7 +456,7 @@ summary = (
         "sst": "mean",
         "chlorophyll_a": "mean",
         "rainfall": "mean",
-        "sea_level_pressure": "mean"
+        "sea_level_pressure": "mean",
     })
 )
 
@@ -525,7 +525,7 @@ print(
     ELBOW_GRAPH
 )
 
-print(
+print(                                  
     "PCA graph:",
     PCA_GRAPH
 )
