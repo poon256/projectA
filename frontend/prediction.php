@@ -1,179 +1,1113 @@
 <?php
 session_start();
+
+/* =========================================================
+   DATABASE
+========================================================= */
+
+$conn = new mysqli(
+    "127.0.0.1",
+    "root",
+    "",
+    "projecta"
+);
+
+if ($conn->connect_error) {
+    die("เชื่อมต่อฐานข้อมูลไม่ได้: " . $conn->connect_error);
+}
+
+$conn->set_charset("utf8mb4");
+
+
+/* =========================================================
+   PYTHON
+========================================================= */
+
+$python = "python";
+
+
+/* =========================================================
+   MONTH
+========================================================= */
+
+$months = [
+    1  => "มกราคม",
+    2  => "กุมภาพันธ์",
+    3  => "มีนาคม",
+    4  => "เมษายน",
+    5  => "พฤษภาคม",
+    6  => "มิถุนายน",
+    7  => "กรกฎาคม",
+    8  => "สิงหาคม",
+    9  => "กันยายน",
+    10 => "ตุลาคม",
+    11 => "พฤศจิกายน",
+    12 => "ธันวาคม"
+];
+
+
+/* =========================================================
+   PROVINCE / STATION
+========================================================= */
+
+$provinces = [
+    1 => "เพชรบุรี",
+    2 => "สมุทรสงคราม",
+    3 => "สมุทรสาคร",
+    4 => "ชลบุรี",
+    5 => "สมุทรปราการ"
+];
+
+
+/* =========================================================
+   DEFAULT
+========================================================= */
+
+$selectedMonth =
+    isset($_POST["month"])
+    ? intval($_POST["month"])
+    : 1;
+
+$selectedYear =
+    isset($_POST["year"])
+    ? intval($_POST["year"])
+    : 2567;
+
+$selectedProvince =
+    isset($_POST["province"])
+    ? trim($_POST["province"])
+    : "สมุทรสงคราม";
+
+
+$regression = null;
+$classify = null;
+$cluster = null;
+
+$mapData = [];
+
+$error = null;
+
+$spawning = false;
+$spawningDescription = "";
+
+
+/* =========================================================
+   GET STATION ID
+========================================================= */
+
+function getStationId($province, $provinces)
+{
+    foreach ($provinces as $stationId => $name) {
+
+        if ($name === $province) {
+            return $stationId;
+        }
+
+    }
+
+    return null;
+}
+
+
+/* =========================================================
+   RUN PYTHON JSON
+========================================================= */
+
+function runPythonJson(
+    $python,
+    $pythonFile,
+    $args
+) {
+
+    if (!file_exists($pythonFile)) {
+
+        throw new Exception(
+            "ไม่พบไฟล์ Python: " . $pythonFile
+        );
+
+    }
+
+
+    $command =
+        escapeshellarg($python)
+        . " "
+        . escapeshellarg($pythonFile);
+
+
+    foreach ($args as $arg) {
+
+        $command .=
+            " "
+            .
+            escapeshellarg(
+                (string)$arg
+            );
+
+    }
+
+
+    $command .= " 2>&1";
+
+
+    $output = [];
+
+    $returnCode = 0;
+
+
+    exec(
+        $command,
+        $output,
+        $returnCode
+    );
+
+
+    $text =
+        trim(
+            implode(
+                "\n",
+                $output
+            )
+        );
+
+
+    $json = null;
+
+
+    /*
+     * หา JSON จาก output
+     */
+
+    for (
+        $i = count($output) - 1;
+        $i >= 0;
+        $i--
+    ) {
+
+        $line =
+            trim(
+                $output[$i]
+            );
+
+
+        if ($line === "") {
+            continue;
+        }
+
+
+        $decoded =
+            json_decode(
+                $line,
+                true
+            );
+
+
+        if (
+            json_last_error()
+            ===
+            JSON_ERROR_NONE
+            &&
+            is_array($decoded)
+        ) {
+
+            $json = $decoded;
+
+            break;
+
+        }
+
+    }
+
+
+    if ($json === null) {
+
+        throw new Exception(
+            "Python ไม่ได้ส่ง JSON กลับมา\n\n"
+            . $text
+        );
+
+    }
+
+
+    if ($returnCode !== 0) {
+
+        throw new Exception(
+            $json["message"]
+            ??
+            $json["error"]
+            ??
+            "Python ทำงานไม่สำเร็จ"
+        );
+
+    }
+
+
+    return $json;
+}
+
+
+/* =========================================================
+   RUN PREDICTION
+========================================================= */
+
+if (
+    $_SERVER["REQUEST_METHOD"] === "POST"
+    &&
+    isset($_POST["run_prediction"])
+) {
+
+    try {
+
+        /* =================================================
+           VALIDATE
+        ================================================= */
+
+        if (
+            $selectedMonth < 1
+            ||
+            $selectedMonth > 12
+        ) {
+
+            throw new Exception(
+                "เดือนต้องอยู่ระหว่าง 1-12"
+            );
+
+        }
+
+
+        if (
+            $selectedYear < 2562
+            ||
+            $selectedYear > 2569
+        ) {
+
+            throw new Exception(
+                "ปีต้องอยู่ระหว่าง 2562-2569"
+            );
+
+        }
+
+
+        $stationId =
+            getStationId(
+                $selectedProvince,
+                $provinces
+            );
+
+
+        if ($stationId === null) {
+
+            throw new Exception(
+                "ไม่พบจังหวัดที่เลือก"
+            );
+
+        }
+
+
+        /* =================================================
+           1. REGRESSION
+        ================================================= */
+
+        $regressionFile =
+            __DIR__
+            .
+            "/../model/Regression_Linear_4env.py";
+
+
+        if (file_exists($regressionFile)) {
+
+            $provinceB64 =
+                base64_encode(
+                    $selectedProvince
+                );
+
+
+            try {
+
+                $regression =
+                    runPythonJson(
+
+                        $python,
+
+                        $regressionFile,
+
+                        [
+                            $provinceB64,
+                            $selectedYear,
+                            $selectedMonth,
+                            "--b64"
+                        ]
+
+                    );
+
+            }
+            catch (Throwable $e) {
+
+                $regression = [
+
+                    "status" => "error",
+
+                    "message" =>
+                        $e->getMessage()
+
+                ];
+
+            }
+
+        }
+        else {
+
+            $regression = [
+
+                "status" => "error",
+
+                "message" =>
+                    "ไม่พบไฟล์ Regression_Linear_4env.py"
+
+            ];
+
+        }
+
+
+        /* =================================================
+           2. RANDOM FOREST
+        ================================================= */
+
+        $rfFile =
+            __DIR__
+            .
+            "/../model/randomforestclassifier.py";
+
+
+        if (file_exists($rfFile)) {
+
+            try {
+
+                $classify =
+                    runPythonJson(
+
+                        $python,
+
+                        $rfFile,
+
+                        [
+                            "--predict",
+                            "--year",
+                            $selectedYear,
+                            "--month",
+                            $selectedMonth,
+                            "--province",
+                            $selectedProvince
+                        ]
+
+                    );
+
+            }
+            catch (Throwable $e) {
+
+                $classify = [
+
+                    "success" => false,
+
+                    "error" =>
+                        $e->getMessage()
+
+                ];
+
+            }
+
+        }
+        else {
+
+            $classify = [
+
+                "success" => false,
+
+                "error" =>
+                    "ไม่พบไฟล์ randomforestclassifier.py"
+
+            ];
+
+        }
+
+
+        /* =================================================
+           3. K-MEANS
+        ================================================= */
+
+        $clusterSql = "
+
+            SELECT
+                ROUND(AVG(cluster)) AS cluster
+
+            FROM dataset_ml
+
+            WHERE station_id = $stationId
+
+              AND year = $selectedYear
+
+              AND month = $selectedMonth
+
+        ";
+
+
+        $clusterResult =
+            $conn->query(
+                $clusterSql
+            );
+
+
+        if (
+            $clusterResult
+            &&
+            $clusterRow =
+            $clusterResult->fetch_assoc()
+        ) {
+
+            if (
+                $clusterRow["cluster"]
+                !== null
+            ) {
+
+                $cluster =
+                    intval(
+                        $clusterRow["cluster"]
+                    );
+
+            }
+
+        }
+
+
+        /* =================================================
+           4. SPAWNING / CLOSED GULF PERIOD
+        ================================================= */
+
+        $spawning = false;
+
+        $spawningDescription = "";
+
+
+        /*
+         * ตรวจสอบตาม station_id
+         *
+         * รองรับจังหวัดที่มีมากกว่า 1 ช่วง
+         * เช่น สมุทรสาคร
+         */
+
+        $spawnSql = "
+
+            SELECT
+
+                start_month,
+                end_month,
+                start_day,
+                end_day,
+                description
+
+            FROM spawning_season
+
+            WHERE station_id = $stationId
+
+              AND start_month <= $selectedMonth
+
+              AND end_month >= $selectedMonth
+
+            ORDER BY
+                start_month ASC
+
+        ";
+
+
+        $spawnResult =
+            $conn->query(
+                $spawnSql
+            );
+
+
+        if (
+            $spawnResult
+            &&
+            $spawnResult->num_rows > 0
+        ) {
+
+            $spawning = true;
+
+            $descriptions = [];
+
+
+            while (
+                $spawnRow =
+                $spawnResult->fetch_assoc()
+            ) {
+
+                if (
+                    !empty(
+                        $spawnRow["description"]
+                    )
+                ) {
+
+                    $descriptions[] =
+                        $spawnRow["description"];
+
+                }
+
+            }
+
+
+            if (
+                count($descriptions) > 0
+            ) {
+
+                $spawningDescription =
+                    implode(
+                        " / ",
+                        $descriptions
+                    );
+
+            }
+            else {
+
+                $spawningDescription =
+                    "อยู่ในช่วงมาตรการปิดอ่าวไทยตอนบน";
+
+            }
+
+        }
+
+
+        /* =================================================
+           5. HEATMAP
+        ================================================= */
+
+        $mapSql = "
+
+            SELECT
+
+                s.station_name,
+
+                s.latitude,
+
+                s.longitude,
+
+                d.station_id,
+
+                d.year,
+
+                d.month,
+
+                SUM(d.amount) AS amount,
+
+                ROUND(
+                    AVG(d.cluster)
+                ) AS cluster
+
+            FROM dataset_ml d
+
+            INNER JOIN station s
+                ON d.station_id = s.id
+
+            WHERE
+
+                d.year = $selectedYear
+
+                AND
+
+                d.month = $selectedMonth
+
+            GROUP BY
+
+                s.station_name,
+                s.latitude,
+                s.longitude,
+                d.station_id,
+                d.year,
+                d.month
+
+            ORDER BY
+                d.station_id
+
+        ";
+
+
+        $mapResult =
+            $conn->query(
+                $mapSql
+            );
+
+
+        if ($mapResult) {
+
+            while (
+                $row =
+                $mapResult->fetch_assoc()
+            ) {
+
+                if (
+                    floatval(
+                        $row["latitude"]
+                    ) != 0
+                    &&
+                    floatval(
+                        $row["longitude"]
+                    ) != 0
+                ) {
+
+                    $mapData[] =
+                        $row;
+
+                }
+
+            }
+
+        }
+
+    }
+    catch (Throwable $e) {
+
+        $error =
+            $e->getMessage();
+
+    }
+
+}
+
+
+/* =========================================================
+   REGRESSION RESULT
+========================================================= */
+
+$regressionTon = null;
+
+
+if (
+    is_array($regression)
+    &&
+    (
+        $regression["status"]
+        ??
+        ""
+    ) === "success"
+) {
+
+    $regressionTon =
+        $regression["ton"]
+        ??
+        null;
+
+}
+
+
+/* =========================================================
+   CLASSIFICATION RESULT
+========================================================= */
+
+$classLevel = null;
+$classThai = null;
+$classConfidence = null;
+
+
+if (is_array($classify)) {
+
+    $classLevel =
+        $classify["prediction"]
+        ??
+        null;
+
+
+    $classThai =
+        $classify["prediction_th"]
+        ??
+        null;
+
+
+    if (
+        isset(
+            $classify["confidence"]
+        )
+    ) {
+
+        $classConfidence =
+            floatval(
+                $classify["confidence"]
+            );
+
+
+        if (
+            $classConfidence <= 1
+        ) {
+
+            $classConfidence *= 100;
+
+        }
+
+    }
+
+}
+
+
+$conn->close();
+
 ?>
 
 <!DOCTYPE html>
+
 <html lang="th">
 
 <head>
 
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<meta
+    name="viewport"
+    content="width=device-width, initial-scale=1.0"
+>
 
 <title>Prediction</title>
 
-<link rel="icon" type="image/png" href="../img/logo.png">
+<link
+    rel="icon"
+    type="image/png"
+    href="../img/logo.png"
+>
 
-<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"
-      rel="stylesheet">
+<link
+    href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"
+    rel="stylesheet"
+>
 
-<link rel="stylesheet" href="../css/menu.css">
-<link rel="stylesheet" href="../css/data.css">
+<link
+    rel="stylesheet"
+    href="../css/menu.css"
+>
+
+<link
+    rel="stylesheet"
+    href="../css/data.css"
+>
+
+<link
+    rel="stylesheet"
+    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+>
+
+<script
+    src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+></script>
+
+
+<style>
+
+.result-card {
+    min-height: 180px;
+}
+
+.result-value {
+    font-size: 32px;
+    font-weight: 700;
+}
+
+.spawning-alert {
+    background: #fff3cd;
+    border: 1px solid #ffecb5;
+    color: #664d03;
+    padding: 15px 20px;
+    border-radius: 10px;
+    margin-bottom: 24px;
+}
+
+.spawning-normal {
+    background: #d1e7dd;
+    border-color: #badbcc;
+    color: #0f5132;
+}
+
+#prediction-map {
+    height: 500px;
+    width: 100%;
+    border-radius: 8px;
+}
+
+.cluster-badge {
+    font-size: 18px;
+    padding: 10px 18px;
+}
+
+.error-box {
+    white-space: pre-wrap;
+}
+
+</style>
 
 </head>
 
+
 <body>
 
+
 <?php include 'menu.php'; ?>
+
 
 <div class="container page-container">
 
     <div class="page-header mb-4">
 
         <h2>
-
             Prediction Dashboard
-
         </h2>
 
         <p class="text-muted">
-
             Integrated AI Prediction System
-
         </p>
 
     </div>
 
-    <!-- Input -->
+
+    <?php if ($error !== null): ?>
+
+        <div class="alert alert-danger error-box">
+
+            <strong>
+                เกิดข้อผิดพลาด:
+            </strong>
+
+            <?= htmlspecialchars($error) ?>
+
+        </div>
+
+    <?php endif; ?>
+
 
     <div class="card shadow-sm border-0 mb-4">
 
         <div class="card-header">
-
             Prediction Parameters
-
         </div>
 
         <div class="card-body">
 
-            <div class="row">
+            <form method="post">
 
-                <div class="col-md-4 mb-3">
+                <div class="row">
 
-                    <label class="form-label">
+                    <!-- MONTH -->
 
-                        Month
+                    <div class="col-md-4 mb-3">
 
-                    </label>
+                        <label class="form-label">
+                            Month
+                        </label>
 
-                    <select class="form-select">
+                        <select
+                            class="form-select"
+                            name="month"
+                            required
+                        >
 
-                        <option>มกราคม</option>
-                        <option>กุมภาพันธ์</option>
-                        <option>มีนาคม</option>
-                        <option>เมษายน</option>
-                        <option>พฤษภาคม</option>
-                        <option>มิถุนายน</option>
-                        <option>กรกฎาคม</option>
-                        <option>สิงหาคม</option>
-                        <option>กันยายน</option>
-                        <option>ตุลาคม</option>
-                        <option>พฤศจิกายน</option>
-                        <option>ธันวาคม</option>
+                            <?php foreach (
+                                $months
+                                as $num => $name
+                            ): ?>
 
-                    </select>
+                                <option
+                                    value="<?= $num ?>"
+                                    <?= (
+                                        $selectedMonth == $num
+                                    )
+                                    ? "selected"
+                                    : ""
+                                    ?>
+                                >
+
+                                    <?= $name ?>
+
+                                </option>
+
+                            <?php endforeach; ?>
+
+                        </select>
+
+                    </div>
+
+
+                    <!-- YEAR -->
+
+                    <div class="col-md-4 mb-3">
+
+                        <label class="form-label">
+                            Year
+                        </label>
+
+                        <select
+                            class="form-select"
+                            name="year"
+                            required
+                        >
+
+                            <?php
+
+                            for (
+                                $y = 2562;
+                                $y <= 2569;
+                                $y++
+                            ):
+
+                            ?>
+
+                                <option
+                                    value="<?= $y ?>"
+                                    <?= (
+                                        $selectedYear == $y
+                                    )
+                                    ? "selected"
+                                    : ""
+                                    ?>
+                                >
+
+                                    <?= $y ?>
+
+                                </option>
+
+                            <?php endfor; ?>
+
+                        </select>
+
+                    </div>
+
+
+                    <!-- PROVINCE -->
+
+                    <div class="col-md-4 mb-3">
+
+                        <label class="form-label">
+                            Province
+                        </label>
+
+                        <select
+                            class="form-select"
+                            name="province"
+                            required
+                        >
+
+                            <?php foreach (
+                                $provinces
+                                as $id => $name
+                            ): ?>
+
+                                <option
+                                    value="<?= htmlspecialchars($name) ?>"
+                                    <?= (
+                                        $selectedProvince === $name
+                                    )
+                                    ? "selected"
+                                    : ""
+                                    ?>
+                                >
+
+                                    <?= htmlspecialchars($name) ?>
+
+                                </option>
+
+                            <?php endforeach; ?>
+
+                        </select>
+
+                    </div>
 
                 </div>
 
-                <div class="col-md-4 mb-3">
 
-                    <label class="form-label">
+                <button
+                    type="submit"
+                    name="run_prediction"
+                    class="btn btn-primary"
+                >
 
-                        Year
+                    Predict
 
-                    </label>
+                </button>
 
-                    <input type="number"
-                           class="form-control"
-                           value="2567">
-
-                </div>
-
-                <div class="col-md-4 mb-3">
-
-                    <label class="form-label">
-
-                        Province
-
-                    </label>
-
-                    <select class="form-select">
-
-                        <option>กรุงเทพมหานคร</option>
-                        <option>สมุทรปราการ</option>
-                        <option>สมุทรสาคร</option>
-                        <option>สมุทรสงคราม</option>
-                        <option>เพชรบุรี</option>
-                        <option>ชลบุรี</option>
-                        <option>ฉะเชิงเทรา</option>
-
-                    </select>
-
-                </div>
-
-            </div>
-
-            <button class="btn btn-primary">
-
-                Predict
-
-            </button>
+            </form>
 
         </div>
 
     </div>
 
-    <!-- Spawning -->
 
-    <div class="spawning-alert">
+    <?php if (
+        isset($_POST["run_prediction"])
+    ): ?>
 
-        ⚠ เดือนที่เลือกอยู่ในช่วงฤดูวางไข่ของปลาทู
 
-    </div>
+        <!-- =================================================
+             SPAWNING / CLOSED GULF ALERT
+        ================================================= -->
 
-    <!-- Result -->
+        <?php if ($spawning): ?>
 
-    <div class="row mb-4">
+            <div class="spawning-alert">
 
-        <div class="col-md-4 mb-3">
+                ⚠️
 
-            <div class="card shadow-sm result-card">
+                <strong>
+                    แจ้งเตือน:
+                </strong>
 
-                <div class="card-body">
+                เดือน
+                <?= htmlspecialchars(
+                    $months[$selectedMonth]
+                ) ?>
 
-                    <h5>
+                อยู่ในช่วงมาตรการปิดอ่าวไทยตอนบน
 
-                        Regression
+                <?php if (
+                    !empty($spawningDescription)
+                ): ?>
 
-                    </h5>
-
-                    <h2 class="text-primary">
-
-                        -
-
-                    </h2>
+                    <br>
 
                     <small>
 
-                        Ton
+                        <?= htmlspecialchars(
+                            $spawningDescription
+                        ) ?>
 
                     </small>
 
-                </div>
+                <?php endif; ?>
 
             </div>
 
-        </div>
+
+        <?php else: ?>
+
+            <div
+                class="spawning-alert spawning-normal"
+            >
+
+                ☑️
+
+                เดือน
+                <?= htmlspecialchars(
+                    $months[$selectedMonth]
+                ) ?>
+
+                ไม่อยู่ในช่วงมาตรการปิดอ่าวไทยตอนบน
+
+            </div>
+
+        <?php endif; ?>
+
+
+    <?php endif; ?>
+
+
+    <!-- =================================================
+         RESULT CARDS
+    ================================================= -->
+
+    <div class="row mb-4">
+
+        <!-- REGRESSION -->
 
         <div class="col-md-4 mb-3">
 
@@ -182,18 +1116,164 @@ session_start();
                 <div class="card-body">
 
                     <h5>
-
-                        Classification
-
+                        Regression
                     </h5>
 
-                    <span class="badge bg-danger fs-5 px-4 py-2">
+                    <?php if (
+                        $regressionTon !== null
+                    ): ?>
 
-                        -
+                        <div
+                            class="result-value text-primary"
+                        >
 
-                    </span>
+                            <?= number_format(
+                                floatval($regressionTon),
+                                2
+                            ) ?>
 
-                    <small class="mt-2">
+                        </div>
+
+                        <small>
+                            Ton
+                        </small>
+
+                    <?php else: ?>
+
+                        <div class="result-value">
+                            -
+                        </div>
+
+                        <small>
+                            Ton
+                        </small>
+
+                    <?php endif; ?>
+
+                </div>
+
+            </div>
+
+        </div>
+
+
+        <!-- CLASSIFICATION -->
+
+        <div class="col-md-4 mb-3">
+
+            <div class="card shadow-sm result-card">
+
+                <div class="card-body">
+
+                    <h5>
+                        Classification
+                    </h5>
+
+
+                    <?php if (
+                        $classLevel !== null
+                    ): ?>
+
+
+                        <?php
+
+                        if ($classLevel === "LOW") {
+
+                            $badgeClass =
+                                "bg-danger";
+
+                        }
+                        elseif ($classLevel === "MEDIUM") {
+
+                            $badgeClass =
+                                "bg-warning text-dark";
+
+                        }
+                        elseif ($classLevel === "HIGH") {
+
+                            $badgeClass =
+                                "bg-success";
+
+                        }
+                        else {
+
+                            $badgeClass =
+                                "bg-secondary";
+
+                        }
+
+                        ?>
+
+
+                        <span
+                            class="badge
+                                   <?= $badgeClass ?>
+                                   fs-5
+                                   px-4
+                                   py-2"
+                        >
+
+                            <?= htmlspecialchars(
+                                $classLevel
+                            ) ?>
+
+                        </span>
+
+
+                        <?php if (
+                            $classThai !== null
+                        ): ?>
+
+                            <div class="mt-2">
+
+                                <?= htmlspecialchars(
+                                    $classThai
+                                ) ?>
+
+                            </div>
+
+                        <?php endif; ?>
+
+
+                        <?php if (
+                            $classConfidence !== null
+                        ): ?>
+
+                            <small
+                                class="d-block mt-2"
+                            >
+
+                                Confidence:
+                                <?= number_format(
+                                    $classConfidence,
+                                    1
+                                ) ?>%
+
+                            </small>
+
+                        <?php endif; ?>
+
+
+                    <?php else: ?>
+
+                        <span
+                            class="badge
+                                   bg-secondary
+                                   fs-5
+                                   px-4
+                                   py-2"
+                        >
+
+                            -
+
+                        </span>
+
+                    <?php endif; ?>
+
+
+                    <small
+                        class="d-block mt-2"
+                    >
 
                         Density Level
 
@@ -205,6 +1285,9 @@ session_start();
 
         </div>
 
+
+        <!-- K-MEANS -->
+
         <div class="col-md-4 mb-3">
 
             <div class="card shadow-sm result-card">
@@ -212,20 +1295,39 @@ session_start();
                 <div class="card-body">
 
                     <h5>
-
                         Cluster
-
                     </h5>
 
-                    <h2>
 
-                        -
+                    <?php if (
+                        $cluster !== null
+                    ): ?>
 
-                    </h2>
+                        <span
+                            class="badge
+                                   bg-primary
+                                   cluster-badge"
+                        >
 
-                    <small>
+                            กลุ่มที่
+                            <?= $cluster + 1 ?>
 
-                        Cluster Group
+                        </span>
+
+                    <?php else: ?>
+
+                        <div class="result-value">
+                            -
+                        </div>
+
+                    <?php endif; ?>
+
+
+                    <small
+                        class="d-block mt-2"
+                    >
+
+                        K-Means Cluster Group
 
                     </small>
 
@@ -237,49 +1339,164 @@ session_start();
 
     </div>
 
-    <!-- Heatmap -->
+
+    <!-- =================================================
+         HEATMAP
+    ================================================= -->
 
     <div class="card shadow-sm border-0 mb-4">
 
         <div class="card-header">
-
             Heatmap
-
         </div>
 
         <div class="card-body">
 
-            <div class="graph-placeholder">
-
-                Heatmap Visualization
-
-            </div>
+            <div id="prediction-map"></div>
 
         </div>
 
     </div>
 
-    <!-- Summary -->
 
-    <div class="card shadow-sm border-0">
+    <!-- =================================================
+         AI SUMMARY
+    ================================================= -->
+
+    <div class="card shadow-sm border-0 mb-5">
 
         <div class="card-header">
-
             AI Summary
-
         </div>
 
         <div class="card-body">
 
-            พื้นที่ที่เลือกมีแนวโน้มพบปลาทูในระดับ
+            <?php if (
+                $regressionTon !== null
+                ||
+                $classLevel !== null
+                ||
+                $cluster !== null
+            ): ?>
 
-            <strong class="text-danger">
+                <p>
 
-                HIGH
+                    จังหวัด
 
-            </strong>
+                    <strong>
+                        <?= htmlspecialchars(
+                            $selectedProvince
+                        ) ?>
+                    </strong>
 
-            และอยู่ในกลุ่มพื้นที่ที่มีความหนาแน่นสูง
+                    เดือน
+
+                    <strong>
+                        <?= htmlspecialchars(
+                            $months[$selectedMonth]
+                        ) ?>
+                    </strong>
+
+                    ปี
+
+                    <strong>
+                        <?= $selectedYear ?>
+                    </strong>
+
+                </p>
+
+
+                <?php if (
+                    $regressionTon !== null
+                ): ?>
+
+                    <p>
+
+                        Regression
+                        คาดการณ์ปริมาณปลาทูประมาณ
+
+                        <strong
+                            class="text-primary"
+                        >
+
+                            <?= number_format(
+                                floatval($regressionTon),
+                                2
+                            ) ?>
+
+                            ตัน
+
+                        </strong>
+
+                    </p>
+
+                <?php endif; ?>
+
+
+                <?php if (
+                    $classLevel !== null
+                ): ?>
+
+                    <p>
+
+                        Random Forest
+                        จัดระดับเป็น
+
+                        <strong>
+                            <?= htmlspecialchars(
+                                $classLevel
+                            ) ?>
+                        </strong>
+
+                        <?php if (
+                            $classThai !== null
+                        ): ?>
+
+                            (
+                            <?= htmlspecialchars(
+                                $classThai
+                            ) ?>
+                            )
+
+                        <?php endif; ?>
+
+                    </p>
+
+                <?php endif; ?>
+
+
+                <?php if (
+                    $cluster !== null
+                ): ?>
+
+                    <p>
+
+                        K-Means
+                        จัดให้อยู่ใน
+
+                        <strong>
+
+                            กลุ่มที่
+                            <?= $cluster + 1 ?>
+
+                        </strong>
+
+                    </p>
+
+                <?php endif; ?>
+
+
+            <?php else: ?>
+
+                <p class="text-muted mb-0">
+
+                    เลือกเดือน ปี และจังหวัด
+                    จากนั้นกด Predict
+                    เพื่อให้ระบบประมวลผล
+
+                </p>
+
+            <?php endif; ?>
 
         </div>
 
@@ -287,9 +1504,221 @@ session_start();
 
 </div>
 
+
+<!-- =========================================================
+     LEAFLET MAP
+========================================================= -->
+
+<script>
+
+var map =
+    L.map(
+        "prediction-map"
+    ).setView(
+        [13.25, 100.15],
+        8
+    );
+
+
+L.tileLayer(
+    "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+    {
+        maxZoom: 18,
+        attribution:
+            "&copy; OpenStreetMap"
+    }
+).addTo(map);
+
+
+var mapData =
+    <?= json_encode(
+        $mapData,
+        JSON_UNESCAPED_UNICODE |
+        JSON_UNESCAPED_SLASHES
+    ) ?>;
+
+
+mapData.forEach(
+    function(row) {
+
+        var lat =
+            parseFloat(
+                row.latitude
+            );
+
+        var lng =
+            parseFloat(
+                row.longitude
+            );
+
+        var amount =
+            parseFloat(
+                row.amount
+            );
+
+
+        if (
+            !isFinite(lat)
+            ||
+            !isFinite(lng)
+        ) {
+
+            return;
+
+        }
+
+
+        var clusterValue =
+            parseInt(
+                row.cluster
+            );
+
+
+        var color =
+            clusterValue === 0
+            ? "red"
+            : "blue";
+
+
+        var radius = 6;
+
+
+        if (amount >= 100) {
+
+            radius = 18;
+
+        }
+        else if (amount >= 50) {
+
+            radius = 14;
+
+        }
+        else if (amount >= 10) {
+
+            radius = 10;
+
+        }
+
+
+        L.circleMarker(
+            [lat, lng],
+            {
+                radius: radius,
+                color: color,
+                fillColor: color,
+                fillOpacity: 0.8
+            }
+        )
+        .addTo(map)
+        .bindPopup(
+
+            "<b>"
+            +
+            row.station_name
+            +
+            "</b><br>"
+            +
+
+            "ปี : "
+            +
+            row.year
+            +
+            "<br>"
+            +
+
+            "เดือน : "
+            +
+            row.month
+            +
+            "<br>"
+            +
+
+            "<b>ปริมาณปลา :</b> "
+            +
+            amount.toFixed(2)
+            +
+            " ตัน<br>"
+            +
+
+            "<b>Cluster :</b> "
+            +
+            (
+                isNaN(clusterValue)
+                ? "N/A"
+                :
+                "กลุ่มที่ "
+                +
+                (clusterValue + 1)
+            )
+
+        );
+
+    }
+);
+
+
+/* =========================================================
+   MAP LEGEND
+========================================================= */
+
+var legend =
+    L.control({
+        position: "bottomright"
+    });
+
+
+legend.onAdd =
+function() {
+
+    var div =
+        L.DomUtil.create(
+            "div",
+            "legend"
+        );
+
+
+    div.style.background =
+        "white";
+
+    div.style.padding =
+        "10px";
+
+    div.style.borderRadius =
+        "8px";
+
+    div.style.boxShadow =
+        "0 0 10px rgba(0,0,0,0.2)";
+
+
+    div.innerHTML =
+
+        "<b>K-Means</b><br>" +
+
+        "<span style='color:red;font-size:20px'>●</span> กลุ่มที่ 1<br>" +
+
+        "<span style='color:blue;font-size:20px'>●</span> กลุ่มที่ 2";
+
+
+    return div;
+
+};
+
+
+legend.addTo(map);
+
+</script>
+
+
+<!-- Bootstrap JS -->
+
+<script
+    src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js">
+</script>
+
+
 <?php include 'footer.php'; ?>
 
-<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 
 </body>
+
 </html>
