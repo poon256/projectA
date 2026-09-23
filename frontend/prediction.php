@@ -553,68 +553,99 @@ if (
         }
 
 
-        /* =================================================
-           4. SPAWNING
-        ================================================= */
+/* =================================================
+   4. SPAWNING
+================================================= */
 
-        $spawning = false;
+$spawning = false;
 
-        $spawningDescription = "";
-
-
-        $spawnSql = "
-
-            SELECT
-
-                start_month,
-                end_month,
-                start_day,
-                end_day,
-                description
-
-            FROM spawning_season
-
-            WHERE
-
-                start_month <= $selectedMonth
-
-                AND
-
-                end_month >= $selectedMonth
-
-            LIMIT 1
-
-        ";
+$spawningDescription = "";
 
 
-        $spawnResult =
-            $conn->query(
-                $spawnSql
-            );
+/*
+ * ตรวจจากฐานข้อมูลก่อน
+ */
+$spawnSql = "
+
+    SELECT
+
+        start_month,
+        end_month,
+        start_day,
+        end_day,
+        description
+
+    FROM spawning_season
+
+    WHERE
+
+        start_month <= $selectedMonth
+
+        AND
+
+        end_month >= $selectedMonth
+
+    LIMIT 1
+
+";
 
 
-        if (
-            $spawnResult
-            &&
-            $spawnResult->num_rows > 0
-        ) {
-
-            $spawnRow =
-                $spawnResult->fetch_assoc();
+$spawnResult =
+    $conn->query(
+        $spawnSql
+    );
 
 
-            $spawning = true;
+/*
+ * ถ้ามีข้อมูลในฐานข้อมูล
+ */
+if (
+    $spawnResult
+    &&
+    $spawnResult->num_rows > 0
+) {
+
+    $spawnRow =
+        $spawnResult->fetch_assoc();
 
 
-            $spawningDescription =
-                !empty(
-                    $spawnRow["description"]
-                )
-                ?
-                $spawnRow["description"]
-                :
-                "อยู่ในช่วงฤดูวางไข่ของปลาทู";
-        }
+    $spawning = true;
+
+
+    $spawningDescription =
+        !empty(
+            $spawnRow["description"]
+        )
+        ?
+        $spawnRow["description"]
+        :
+        "อยู่ในช่วงฤดูวางไข่ของปลาทู";
+
+}
+
+
+/*
+ * ถ้าไม่มีข้อมูลใน spawning_season
+ * ให้ใช้ช่วงฤดูวางไข่สำรอง
+ * มิถุนายน - สิงหาคม
+ */
+else {
+
+    if (
+        $selectedMonth >= 6
+        &&
+        $selectedMonth <= 8
+    ) {
+
+        $spawning = true;
+
+        $spawningDescription =
+            "ช่วงฤดูวางไข่ของปลาทู "
+            . "ระหว่างเดือนมิถุนายน - สิงหาคม";
+
+    }
+
+}
 
 
         /* =================================================
