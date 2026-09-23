@@ -1,22 +1,22 @@
 {
   "success": true,
-  "prediction": "MEDIUM",
-  "prediction_th": "ปานกลาง",
-  "confidence": 0.4766666666666667,
+  "prediction": "LOW",
+  "prediction_th": "ต่ำ",
+  "confidence": 0.5733333333333334,
   "probabilities": {
-    "LOW": 0.21666666666666667,
-    "MEDIUM": 0.4766666666666667,
-    "HIGH": 0.30666666666666664
+    "LOW": 0.5733333333333334,
+    "MEDIUM": 0.3,
+    "HIGH": 0.12666666666666668
   },
   "mode": "auto",
   "input": {
     "year": 2567,
-    "month": 11,
+    "month": 1,
     "province": "เพชรบุรี",
     "station_id": 1,
-    "sst": 30.2,
-    "chlorophyll_a": 3.33,
-    "rainfall": 99.99999999,
-    "wind_speed": 24.17000008
+    "sst": 27.61,
+    "chlorophyll_a": 1.91,
+    "rainfall": 18.39999962,
+    "wind_speed": 20.8064518
   }
 }

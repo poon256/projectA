@@ -163,11 +163,6 @@
                 Classification
             </a>
 
-            <a href="classification2.php"
-               class="list-group-item list-group-item-action">
-                Classification2
-            </a>
-
             <a href="clustering.php"
                class="list-group-item list-group-item-action">
                 Clustering
