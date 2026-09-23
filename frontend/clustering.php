@@ -174,8 +174,8 @@ session_start();
                                 <td><?php echo htmlspecialchars($item['station_name']); ?></td>
                                 <td>
                                     <?php 
-                                    if($item['cluster'] == 0) echo '<span class="badge bg-danger">Cluster 0 (วิกฤต/ปลาน้อย)</span>';
-                                    elseif($item['cluster'] == 1) echo '<span class="badge bg-warning text-dark">Cluster 1 (ปานกลาง)</span>';
+                                    if($item['cluster'] == 0) echo '<span class="badge bg-danger">Cluster 0 (ปลาน้อย)</span>';
+                                    elseif($item['cluster'] == 1) echo '<span class="badge bg-warning text-dark">Cluster 1 (ปลาชุกชุม)</span>';
                                     else echo '<span class="badge bg-primary">Cluster 2 (ปลาชุกชุม)</span>';
                                     ?>
                                 </td>
@@ -208,7 +208,7 @@ data.forEach(function(r){
  
     let color; 
     if(r.cluster == 0){ 
-        color = "red";    // วิกฤต,ปลาน้อย
+        color = "red";    // ปลาน้อย
     } 
     else{ 
         color = "blue";    // ปลาชุกชุม
